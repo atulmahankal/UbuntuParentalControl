@@ -19,21 +19,44 @@ To allow the Parental Control application to read the schedule without requiring
 2. Under **General access**, change the dropdown from **Restricted** to **"Anyone with the link"**.
 3. Ensure the permission role on the right is set to **"Viewer"** (Read-Only).
 4. Click **Copy link** (e.g. `https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing`).
-5. Save this copied URL — you will supply it during installation.
+5. Save this copied URL — you will supply it in **Step 1** during installation.
 
 > [!IMPORTANT]
-> The application only requires **Viewer (Read-Only)** access. It reads the schedule over HTTPS and never modifies your spreadsheet.
+> The application only requires **Viewer (Read-Only)** access. It reads the schedule securely over HTTPS and never modifies your spreadsheet.
 
 ---
 
-## 👥 Getting Ubuntu Usernames for Your Spreadsheet
+## ⚡ STEP 1: One-Line Automatic Installation
 
-To ensure your spreadsheet rules match the exact Linux user accounts on your computer:
+Once your Google Sheet is shared with "Anyone with the link (Viewer)", install Parental Control with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing" bash
+```
+
+*(Or simply run `curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo bash` to be prompted interactively for your Google Sheet URL).*
+
+### What `install.sh` does automatically:
+1. Installs all required Ubuntu packages (`python3`, `git`, `curl`, `zenity`, `libnotify-bin`, `libcanberra-gtk-module`).
+2. Installs the Astral **`uv`** package manager.
+3. Clones and installs the application to `/opt/parental-control`.
+4. Builds the Python virtual environment and creates a global symlink at `/usr/local/bin/parentalcontrol`.
+5. Saves your configuration to `/etc/parental-control/config.yaml`.
+6. Configures, enables, and starts the systemd service `/etc/systemd/system/parental-control.service`.
+7. Installs an **APT auto-upgrade hook** (`/etc/apt/apt.conf.d/99parentalcontrol`).
+
+---
+
+## 👥 STEP 2: Getting Ubuntu Usernames for Your Spreadsheet
+
+To ensure your spreadsheet rules match the exact Linux user accounts on your computer, run:
 
 ```bash
 parentalcontrol list-users
 ```
+
 Or generate **ready-to-copy CSV rows** for your children:
+
 ```bash
 parentalcontrol list-users --csv
 ```
@@ -51,9 +74,13 @@ parentalcontrol list-users --csv
 ╘════════════════════════╧═════════════╧═══════╧═════════════════════════╛
 ```
 
+*(Alternative Linux shell command: `awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /nologin|false/ {print $1}' /etc/passwd`)*
+
 ---
 
-## 📋 Google Spreadsheet Format Reference
+## 📋 STEP 3: Google Spreadsheet Format Reference
+
+In your Google Sheet, configure the schedule using the following column format:
 
 | User | Day | Start Time | End Time | Allowed | Max Minutes | Message |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -71,27 +98,6 @@ parentalcontrol list-users --csv
 - **`Allowed`**: `TRUE` (allowed) or `FALSE` (lockout).
 - **`Max Minutes`** *(optional)*: Daily screen time quota in minutes or hours (e.g. `120` or `2h`).
 - **`Message`** *(optional)*: Custom note displayed to the child on screen.
-
----
-
-## ⚡ One-Line Automatic Installation
-
-Once your Google Sheet is shared with "Anyone with the link (Viewer)", install Parental Control with a single command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing" bash
-```
-
-*(Or simply run `curl -fsSL ... | sudo bash` to be prompted interactively for your Google Sheet URL).*
-
-### What `install.sh` does automatically:
-1. Installs all required Ubuntu packages (`python3`, `git`, `curl`, `zenity`, `libnotify-bin`, `libcanberra-gtk-module`).
-2. Installs the Astral **`uv`** package manager.
-3. Clones and installs the application to `/opt/parental-control`.
-4. Builds the Python virtual environment and creates a global symlink at `/usr/local/bin/parentalcontrol`.
-5. Saves your configuration to `/etc/parental-control/config.yaml`.
-6. Configures, enables, and starts the systemd service `/etc/systemd/system/parental-control.service`.
-7. Installs an **APT auto-upgrade hook** (`/etc/apt/apt.conf.d/99parentalcontrol`).
 
 ---
 
@@ -128,26 +134,6 @@ APT will **automatically**:
   - **0 minutes (Time Expired)**: 30-second animated countdown bar before auto-signout.
 - 📴 **Offline Resilience & Cache**: Caches the schedule locally (`/etc/parental-control/schedule_cache.json`) so WiFi disconnects won't disrupt legitimate scheduled hours.
 - ⭐ **Parent Admin Exemption**: Parent accounts (e.g. `atul`, `root`, `admin`) are never restricted.
-
----
-
-## 🛠️ Manual Installation (from Source)
-
-```bash
-# 1. Clone repository
-git clone https://github.com/atulmahankal/ParentalControl.git /opt/parental-control
-cd /opt/parental-control
-
-# 2. Install Astral uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-
-# 3. Sync dependencies
-uv sync
-
-# 4. Install and enable the system service
-sudo uv run parentalcontrol service-install --url "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing"
-```
 
 ---
 
@@ -201,6 +187,26 @@ warnings:
 enforcement:
   termination_grace_seconds: 30
   login_denial_grace_seconds: 15
+```
+
+---
+
+## 🛠️ Manual Installation (from Source)
+
+```bash
+# 1. Clone repository
+git clone https://github.com/atulmahankal/ParentalControl.git /opt/parental-control
+cd /opt/parental-control
+
+# 2. Install Astral uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# 3. Sync dependencies
+uv sync
+
+# 4. Install and enable the system service
+sudo uv run parentalcontrol service-install --url "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing"
 ```
 
 ---
