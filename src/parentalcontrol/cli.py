@@ -3,6 +3,7 @@
 import argparse
 import getpass
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -38,7 +39,7 @@ def cmd_service_install(args: argparse.Namespace, config: AppConfig) -> None:
     """Install and activate parental-control systemd service."""
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         print("❌ Error: Installing system service requires root privileges. Please run with sudo:")
-        print(f"   sudo uv run parentalcontrol service-install" + (f" --url '{args.url}'" if args.url else ""))
+        print(f"   sudo parentalcontrol service-install" + (f" --url '{args.url}'" if args.url else ""))
         sys.exit(1)
 
     if args.url:
@@ -72,7 +73,7 @@ def cmd_service_uninstall(args: argparse.Namespace, config: AppConfig) -> None:
     """Uninstall and disable the systemd service."""
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         print("❌ Error: Uninstalling system service requires root privileges. Please run with sudo:")
-        print("   sudo uv run parentalcontrol service-uninstall")
+        print("   sudo parentalcontrol service-uninstall")
         sys.exit(1)
 
     try:
@@ -118,6 +119,39 @@ def cmd_service_status(args: argparse.Namespace, config: AppConfig) -> None:
     else:
         print("No active desktop sessions detected.")
     print()
+
+
+def cmd_update(args: argparse.Namespace, config: AppConfig) -> None:
+    """Upgrade application to the latest version from git and restart service."""
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        print("❌ Error: Updating system service requires root privileges. Please run with sudo:")
+        print("   sudo parentalcontrol update")
+        sys.exit(1)
+
+    install_dir = Path("/opt/parental-control")
+    if not install_dir.exists():
+        # Fallback to directory containing this file
+        install_dir = Path(__file__).resolve().parent.parent.parent
+
+    print(f"🔄 Updating Parental Control in {install_dir}...")
+    try:
+        if (install_dir / ".git").exists():
+            subprocess.run(["git", "-C", str(install_dir), "pull", "--rebase"], check=True)
+            print("✅ Git repository updated.")
+
+        # Find uv binary
+        uv_bin = shutil.which("uv") or "/root/.local/bin/uv"
+        if os.path.exists(uv_bin):
+            subprocess.run([uv_bin, "sync", "--frozen"], cwd=str(install_dir), check=False)
+            print("✅ Dependencies synced with uv.")
+
+        # Restart systemd service
+        subprocess.run(["systemctl", "restart", "parental-control.service"], check=False)
+        print("✅ Systemd service 'parental-control.service' restarted successfully.")
+        print("\n🎉 Parental Control successfully upgraded to the latest version!")
+    except Exception as e:
+        print(f"❌ Error during update: {e}")
+        sys.exit(1)
 
 
 def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
@@ -291,7 +325,7 @@ child2,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
     print("1. Open Google Sheets (https://sheets.new)")
     print("2. Click File -> Import -> Upload, and choose this CSV file.")
     print("3. Click 'Share' (top right) -> 'General access' -> 'Anyone with the link' (Viewer).")
-    print("4. Copy the link and run: sudo uv run parentalcontrol service-install --url '<COPIED_LINK>'")
+    print("4. Copy the link and run: sudo parentalcontrol service-install --url '<COPIED_LINK>'")
 
 
 def cmd_setup(args: argparse.Namespace, config: AppConfig) -> None:
@@ -343,7 +377,7 @@ def cmd_setup(args: argparse.Namespace, config: AppConfig) -> None:
         saved_path = save_config(config)
         print(f"\n✅ User configuration saved to: {saved_path}")
         print("\nTo activate as a system service, please execute:")
-        print(f"   sudo uv run parentalcontrol service-install --url '{config.google_sheet.url}'\n")
+        print(f"   sudo parentalcontrol service-install --url '{config.google_sheet.url}'\n")
 
 
 def main() -> None:
@@ -374,6 +408,9 @@ def main() -> None:
 
     # Command: service-status
     p_s_status = subparsers.add_parser("service-status", help="Check system service and active sessions")
+
+    # Command: update
+    p_update = subparsers.add_parser("update", help="Update application to latest version (requires sudo)")
 
     # Command: status
     p_status = subparsers.add_parser("status", help="Show current status and schedule")
@@ -414,6 +451,8 @@ def main() -> None:
         cmd_service_uninstall(args, config)
     elif args.command == "service-status":
         cmd_service_status(args, config)
+    elif args.command == "update":
+        cmd_update(args, config)
     elif args.command == "check":
         cmd_check(args, config)
     elif args.command == "status":
