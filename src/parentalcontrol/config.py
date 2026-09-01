@@ -10,6 +10,8 @@ import yaml
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "parental-control"
 SYSTEM_CONFIG_DIR = Path("/etc/parental-control")
+SYSTEM_CACHE_DIR = Path("/var/cache/parental-control")
+SYSTEM_LOG_DIR = Path("/var/log")
 
 
 @dataclass
@@ -53,11 +55,21 @@ class AppConfig:
     config_file_path: Optional[Path] = None
 
     @property
+    def is_system_level(self) -> bool:
+        if self.config_file_path and str(self.config_file_path).startswith("/etc/"):
+            return True
+        return os.geteuid() == 0 if hasattr(os, "geteuid") else False
+
+    @property
     def cache_file_path(self) -> Path:
+        if self.is_system_level:
+            return SYSTEM_CONFIG_DIR / "schedule_cache.json"
         return DEFAULT_CONFIG_DIR / "schedule_cache.json"
 
     @property
     def log_file_path(self) -> Path:
+        if self.is_system_level:
+            return SYSTEM_LOG_DIR / "parental-control.log"
         return DEFAULT_CONFIG_DIR / "parental_control.log"
 
     def is_user_targeted(self, username: Optional[str] = None) -> bool:
@@ -70,14 +82,16 @@ class AppConfig:
 
 
 def get_default_config_path() -> Path:
-    """Return standard config path: user config if exists, else system if exists, else user."""
-    user_cfg = DEFAULT_CONFIG_DIR / "config.yaml"
+    """Return standard config path: system config if root or exists, else user config."""
     sys_cfg = SYSTEM_CONFIG_DIR / "config.yaml"
-    if user_cfg.exists():
-        return user_cfg
+    user_cfg = DEFAULT_CONFIG_DIR / "config.yaml"
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return sys_cfg
     if sys_cfg.exists():
         return sys_cfg
-    return user_cfg
+    if user_cfg.exists():
+        return user_cfg
+    return sys_cfg
 
 
 def load_config(config_path: Optional[Path] = None) -> AppConfig:
@@ -134,7 +148,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
 
 def save_config(config: AppConfig, config_path: Optional[Path] = None) -> Path:
     """Save config to YAML file."""
-    path = config_path or config.config_file_path or (DEFAULT_CONFIG_DIR / "config.yaml")
+    path = config_path or config.config_file_path or get_default_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {

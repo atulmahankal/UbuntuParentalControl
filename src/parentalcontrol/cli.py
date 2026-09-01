@@ -3,6 +3,7 @@
 import argparse
 import getpass
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -10,25 +11,113 @@ from typing import Optional
 
 from tabulate import tabulate
 
-from parentalcontrol.autostart import (
-    get_executable_path,
-    install_system_autostart,
-    install_user_autostart,
-    uninstall_autostart,
-)
 from parentalcontrol.config import (
     AppConfig,
     load_config,
     save_config,
     get_default_config_path,
-)
-from parentalcontrol.daemon import (
-    ParentalControlMonitor,
-    check_and_enforce_login,
-    setup_logging,
+    SYSTEM_CONFIG_DIR,
 )
 from parentalcontrol.evaluator import evaluate_access
 from parentalcontrol.sheet_client import GoogleSheetClient
+from parentalcontrol.system_daemon import SystemParentalControlDaemon
+from parentalcontrol.system_service import (
+    install_system_service,
+    uninstall_system_service,
+    list_active_sessions,
+)
+
+
+def cmd_run_service(args: argparse.Namespace, config: AppConfig) -> None:
+    """Run the multi-session system daemon (invoked by systemd)."""
+    daemon = SystemParentalControlDaemon(config=config)
+    daemon.start()
+
+
+def cmd_service_install(args: argparse.Namespace, config: AppConfig) -> None:
+    """Install and activate parental-control systemd service."""
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        print("❌ Error: Installing system service requires root privileges. Please run with sudo:")
+        print(f"   sudo uv run parentalcontrol service-install" + (f" --url '{args.url}'" if args.url else ""))
+        sys.exit(1)
+
+    if args.url:
+        config.google_sheet.url = args.url
+    if args.target_users:
+        config.rules.target_users = [u.strip() for u in args.target_users.split(",") if u.strip()]
+    if args.exempt_users:
+        config.rules.exempt_users = [u.strip() for u in args.exempt_users.split(",") if u.strip()]
+
+    # Save to /etc/parental-control/config.yaml
+    sys_config_path = SYSTEM_CONFIG_DIR / "config.yaml"
+    saved_path = save_config(config, sys_config_path)
+    print(f"✅ System configuration saved to: {saved_path}")
+
+    # Determine executable path
+    venv_bin = Path(sys.prefix) / "bin" / "parentalcontrol"
+    exec_path = str(venv_bin) if venv_bin.exists() else None
+
+    try:
+        service_file = install_system_service(exec_path=exec_path)
+        print(f"✅ Systemd service installed at: {service_file}")
+        print("✅ Systemd service enabled and started via 'systemctl enable --now parental-control.service'!")
+        print("\nTo check service logs:")
+        print("   sudo journalctl -u parental-control.service -f")
+    except Exception as e:
+        print(f"❌ Failed to install system service: {e}")
+        sys.exit(1)
+
+
+def cmd_service_uninstall(args: argparse.Namespace, config: AppConfig) -> None:
+    """Uninstall and disable the systemd service."""
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        print("❌ Error: Uninstalling system service requires root privileges. Please run with sudo:")
+        print("   sudo uv run parentalcontrol service-uninstall")
+        sys.exit(1)
+
+    try:
+        removed = uninstall_system_service()
+        if removed:
+            print("✅ System service disabled, stopped, and removed successfully.")
+        else:
+            print("ℹ️ No system service file found.")
+    except Exception as e:
+        print(f"❌ Error uninstalling service: {e}")
+        sys.exit(1)
+
+
+def cmd_service_status(args: argparse.Namespace, config: AppConfig) -> None:
+    """Check system service status and view currently monitored user sessions."""
+    print("\n================ SYSTEM SERVICE STATUS ================")
+    try:
+        res = subprocess.run(
+            ["systemctl", "status", "parental-control.service", "--no-pager"],
+            capture_output=True,
+            text=True,
+        )
+        print(res.stdout if res.stdout else res.stderr)
+    except Exception as e:
+        print(f"Could not query systemctl: {e}")
+
+    print("\n================ ACTIVE LOGIND SESSIONS ================")
+    sessions = list_active_sessions()
+    if sessions:
+        table = [
+            [
+                s.session_id,
+                s.username,
+                s.uid,
+                s.session_type,
+                s.state,
+                "🛡️ Monitored" if config.is_user_targeted(s.username) else "⭐ Exempt",
+            ]
+            for s in sessions
+        ]
+        headers = ["Session ID", "Username", "UID", "Type", "State", "Policy"]
+        print(tabulate(table, headers=headers, tablefmt="fancy_grid"))
+    else:
+        print("No active desktop sessions detected.")
+    print()
 
 
 def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
@@ -77,20 +166,6 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
         if result.next_slot:
             print(f"   Next Allowed Window: {result.next_slot.formatted_range()}")
 
-        if not args.dry_run:
-            from parentalcontrol.daemon import _handle_login_denial
-            _handle_login_denial(config, result)
-        else:
-            print("   [Dry-run mode: Session termination skipped]")
-            sys.exit(1)
-
-
-def cmd_monitor(args: argparse.Namespace, config: AppConfig) -> None:
-    """Start continuous session monitor daemon."""
-    user = args.user or getpass.getuser()
-    monitor = ParentalControlMonitor(config=config, username=user)
-    monitor.start()
-
 
 def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
     """Display current parental control status and schedule."""
@@ -104,7 +179,7 @@ def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
     print(f"=========================================================\n")
 
     if not url and not config.google_sheet.service_account_path:
-        print("⚠️ No Google Sheet configured. Run 'parentalcontrol setup' to configure.\n")
+        print("⚠️ No Google Sheet configured. Run 'sudo parentalcontrol service-install' to configure.\n")
         return
 
     client = GoogleSheetClient(
@@ -204,26 +279,31 @@ def cmd_create_template(args: argparse.Namespace) -> None:
 *,Saturday-Sunday,10:00,12:30,TRUE,150,Weekend morning session
 *,Saturday-Sunday,16:00,20:30,TRUE,180,Weekend evening session
 child1,Friday,15:00,21:00,TRUE,180,Friday reward extended time
-child2,Sunday,14:00,19:00,TRUE,120,Sunday afternoon
-*,*,21:00,07:00,FALSE,,Bedtime - No computer access
+child2,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
+*,*,21:00,07:00,FALSE,,Bedtime - Access blocked
 """
-    out_path = Path(args.out) if args.out else Path.cwd() / "parental_control_schedule_template.csv"
+    out_path = Path(args.out) if args.out else Path.cwd() / "google_spreadsheet_template.csv"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(csv_content)
 
-    print(f"✅ Sample template generated at: {out_path.resolve()}")
+    print(f"✅ Template generated at: {out_path.resolve()}")
     print("\nHow to use with Google Sheets:")
     print("1. Open Google Sheets (https://sheets.new)")
     print("2. Click File -> Import -> Upload, and choose this CSV file.")
     print("3. Click 'Share' (top right) -> 'General access' -> 'Anyone with the link' (Viewer).")
-    print("4. Copy the link and run: parentalcontrol setup --url '<COPIED_LINK>'")
+    print("4. Copy the link and run: sudo uv run parentalcontrol service-install --url '<COPIED_LINK>'")
 
 
 def cmd_setup(args: argparse.Namespace, config: AppConfig) -> None:
-    """Interactive or automated setup wizard."""
-    print("\n" + "=" * 55)
-    print("      PARENTAL CONTROL FOR UBUNTU - SETUP WIZARD")
-    print("=" * 55 + "\n")
+    """Interactive setup wizard for system service."""
+    print("\n" + "=" * 58)
+    print("      PARENTAL CONTROL FOR UBUNTU - SYSTEM SERVICE SETUP")
+    print("=" * 58 + "\n")
+
+    is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+    if not is_root:
+        print("⚠️ NOTE: Running as standard user. To install as a system service,")
+        print("please run this wizard with 'sudo'.\n")
 
     url = args.url
     if not url:
@@ -235,65 +315,42 @@ def cmd_setup(args: argparse.Namespace, config: AppConfig) -> None:
 
     target_users = args.target_users
     if not target_users:
-        default_user = getpass.getuser()
         print(f"\nEnter usernames of children to protect (comma-separated, e.g. child1,child2):")
-        print(f"Press Enter to protect current user ('{default_user}') or '*' for all children:")
-        inp = input(f"Target users [{default_user}]: ").strip()
+        print(f"Press Enter for '*' (protects all non-exempt users on this computer):")
+        inp = input("Target users [*]: ").strip()
         if inp:
             config.rules.target_users = [u.strip() for u in inp.split(",") if u.strip()]
         else:
-            config.rules.target_users = [default_user]
+            config.rules.target_users = ["*"]
 
     exempt_users = args.exempt_users
-    if exempt_users:
-        config.rules.exempt_users = [u.strip() for u in exempt_users.split(",") if u.strip()]
+    if not exempt_users:
+        default_exempt = "root,admin,parent"
+        if os.environ.get("SUDO_USER"):
+            default_exempt += f",{os.environ.get('SUDO_USER')}"
+        elif getpass.getuser() != "root":
+            default_exempt += f",{getpass.getuser()}"
+        print(f"\nEnter exempt usernames (never restricted, e.g. {default_exempt}):")
+        inp = input(f"Exempt users [{default_exempt}]: ").strip()
+        if inp:
+            config.rules.exempt_users = [u.strip() for u in inp.split(",") if u.strip()]
+        else:
+            config.rules.exempt_users = [u.strip() for u in default_exempt.split(",") if u.strip()]
 
-    config_path = save_config(config)
-    print(f"\n✅ Configuration saved to: {config_path}")
-
-    # Autostart setup
-    if args.autostart or input("\nInstall autostart for target users so it runs on login? (Y/n): ").strip().lower() != "n":
-        for u in config.rules.target_users:
-            if u not in ("*", "all"):
-                try:
-                    df = install_user_autostart(target_user=u)
-                    print(f"✅ Autostart desktop entry installed for user '{u}' at: {df}")
-                except Exception as e:
-                    print(f"⚠️ Could not install autostart for user '{u}': {e}")
-            else:
-                df = install_user_autostart()
-                print(f"✅ Autostart desktop entry installed at: {df}")
-
-    print("\n🎉 Setup complete! You can test your configuration using:")
-    print("   parentalcontrol test-sheet")
-    print("   parentalcontrol status")
-    print("   parentalcontrol check --dry-run\n")
-
-
-def cmd_install_autostart(args: argparse.Namespace, config: AppConfig) -> None:
-    """Install autostart entry."""
-    if args.system:
-        df = install_system_autostart()
-        print(f"✅ Installed system autostart: {df}")
+    if is_root:
+        cmd_service_install(args, config)
     else:
-        df = install_user_autostart(target_user=args.user)
-        print(f"✅ Installed user autostart: {df}")
-
-
-def cmd_uninstall_autostart(args: argparse.Namespace, config: AppConfig) -> None:
-    """Uninstall autostart entry."""
-    removed = uninstall_autostart(target_user=args.user)
-    if removed:
-        print(f"✅ Autostart entry successfully removed.")
-    else:
-        print(f"ℹ️ No autostart entry found to remove.")
+        saved_path = save_config(config)
+        print(f"\n✅ User configuration saved to: {saved_path}")
+        print("\nTo activate as a system service, please execute:")
+        print(f"   sudo uv run parentalcontrol service-install --url '{config.google_sheet.url}'\n")
 
 
 def main() -> None:
     """Main CLI entrypoint."""
     parser = argparse.ArgumentParser(
         prog="parentalcontrol",
-        description="Parental Control login guard and session monitor for Ubuntu via Google Sheets.",
+        description="Parental Control login guard and system service daemon for Ubuntu via Google Sheets.",
     )
     parser.add_argument(
         "-c", "--config",
@@ -303,20 +360,31 @@ def main() -> None:
 
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
-    # Command: check
-    p_check = subparsers.add_parser("check", help="Check login permission for a user")
-    p_check.add_argument("--user", help="Username to check (defaults to current user)")
-    p_check.add_argument("--url", help="Override Google Sheet URL")
-    p_check.add_argument("--dry-run", action="store_true", help="Do not terminate session on denial")
+    # Command: run-service (invoked by systemd)
+    p_run_service = subparsers.add_parser("run-service", help="Run the background system service daemon")
 
-    # Command: monitor
-    p_monitor = subparsers.add_parser("monitor", help="Start background session monitoring daemon")
-    p_monitor.add_argument("--user", help="Username to monitor (defaults to current user)")
+    # Command: service-install
+    p_s_install = subparsers.add_parser("service-install", help="Install and activate systemd service (requires sudo)")
+    p_s_install.add_argument("--url", help="Google Sheet URL")
+    p_s_install.add_argument("--target-users", help="Comma-separated target usernames")
+    p_s_install.add_argument("--exempt-users", help="Comma-separated exempt usernames")
+
+    # Command: service-uninstall
+    p_s_uninstall = subparsers.add_parser("service-uninstall", help="Stop and remove systemd service (requires sudo)")
+
+    # Command: service-status
+    p_s_status = subparsers.add_parser("service-status", help="Check system service and active sessions")
 
     # Command: status
     p_status = subparsers.add_parser("status", help="Show current status and schedule")
     p_status.add_argument("--user", help="Username to check")
     p_status.add_argument("--url", help="Override Google Sheet URL")
+
+    # Command: check
+    p_check = subparsers.add_parser("check", help="Check login permission for a user")
+    p_check.add_argument("--user", help="Username to check (defaults to current user)")
+    p_check.add_argument("--url", help="Override Google Sheet URL")
+    p_check.add_argument("--dry-run", action="store_true", help="Dry-run test check")
 
     # Command: test-sheet
     p_test = subparsers.add_parser("test-sheet", help="Test fetching and parsing Google Sheet")
@@ -324,34 +392,30 @@ def main() -> None:
     p_test.add_argument("--sheet", help="Sheet tab name")
 
     # Command: setup
-    p_setup = subparsers.add_parser("setup", help="Run setup wizard")
+    p_setup = subparsers.add_parser("setup", help="Interactive system service setup wizard")
     p_setup.add_argument("--url", help="Google Sheet URL")
     p_setup.add_argument("--target-users", help="Comma-separated target usernames")
     p_setup.add_argument("--exempt-users", help="Comma-separated exempt usernames")
-    p_setup.add_argument("--autostart", action="store_true", help="Auto-install autostart entry")
 
     # Command: create-template
     p_template = subparsers.add_parser("create-template", help="Generate sample CSV template")
-    p_template.add_argument("-o", "--out", help="Output file path (default: parental_control_schedule_template.csv)")
-
-    # Command: install-autostart
-    p_inst = subparsers.add_parser("install-autostart", help="Install autostart desktop entry")
-    p_inst.add_argument("--user", help="Target username")
-    p_inst.add_argument("--system", action="store_true", help="Install system-wide (/etc/xdg/autostart)")
-
-    # Command: uninstall-autostart
-    p_uninst = subparsers.add_parser("uninstall-autostart", help="Remove autostart entry")
-    p_uninst.add_argument("--user", help="Target username")
+    p_template.add_argument("-o", "--out", help="Output file path")
 
     args = parser.parse_args()
 
     # Load configuration
     config = load_config(args.config)
 
-    if args.command == "check":
+    if args.command == "run-service":
+        cmd_run_service(args, config)
+    elif args.command == "service-install":
+        cmd_service_install(args, config)
+    elif args.command == "service-uninstall":
+        cmd_service_uninstall(args, config)
+    elif args.command == "service-status":
+        cmd_service_status(args, config)
+    elif args.command == "check":
         cmd_check(args, config)
-    elif args.command == "monitor" or args.command is None and len(sys.argv) > 1 and sys.argv[1] == "monitor":
-        cmd_monitor(args, config)
     elif args.command == "status":
         cmd_status(args, config)
     elif args.command == "test-sheet":
@@ -360,13 +424,8 @@ def main() -> None:
         cmd_setup(args, config)
     elif args.command == "create-template":
         cmd_create_template(args)
-    elif args.command == "install-autostart":
-        cmd_install_autostart(args, config)
-    elif args.command == "uninstall-autostart":
-        cmd_uninstall_autostart(args, config)
     else:
-        # Default: if run with no args, show status
-        cmd_status(args, config)
+        cmd_service_status(args, config)
 
 
 if __name__ == "__main__":
