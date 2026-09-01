@@ -31,10 +31,10 @@ To allow the Parental Control application to read the schedule without requiring
 Once your Google Sheet is shared with "Anyone with the link (Viewer)", install Parental Control with a single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing" bash
+curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing" bash
 ```
 
-*(Or simply run `curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo bash` to be prompted interactively for your Google Sheet URL).*
+*(Or simply run `curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/master/install.sh | sudo bash` to be prompted interactively for your Google Sheet URL).*
 
 ### What `install.sh` does automatically:
 1. Installs all required Ubuntu packages (`python3`, `git`, `curl`, `zenity`, `libnotify-bin`, `libcanberra-gtk-module`).
@@ -195,7 +195,7 @@ enforcement:
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/atulmahankal/ParentalControl.git /opt/parental-control
+git clone https://github.com/atulmahankal/UbuntuParentalControl.git /opt/parental-control
 cd /opt/parental-control
 
 # 2. Install Astral uv (if not already installed)

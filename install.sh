@@ -2,9 +2,9 @@
 # ==============================================================================
 # Parental Control for Ubuntu - Automated Installer & Updater
 # Supports one-line install:
-#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/master/install.sh | sudo bash
 # Or with Google Sheet URL:
-#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/..." bash
+#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/..." bash
 # ==============================================================================
 
 set -euo pipefail
@@ -16,7 +16,7 @@ CONFIG_DIR="/etc/parental-control"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 APT_HOOK_FILE="/etc/apt/apt.conf.d/99parentalcontrol"
-REPO_URL="${REPO_URL:-https://github.com/atulmahankal/ParentalControl.git}"
+REPO_URL="${REPO_URL:-https://github.com/atulmahankal/UbuntuParentalControl.git}"
 BRANCH="${BRANCH:-master}"
 
 # Colors for output
@@ -184,7 +184,7 @@ log_info "Configuring systemd service..."
 cat << SVC_EOF > "${SERVICE_FILE}"
 [Unit]
 Description=Parental Control Google Sheets Schedule Enforcer & Session Guard
-Documentation=https://github.com/atulmahankal/ParentalControl
+Documentation=https://github.com/atulmahankal/UbuntuParentalControl
 After=network.target network-online.target systemd-logind.service
 Wants=network-online.target systemd-logind.service
 

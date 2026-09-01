@@ -284,7 +284,7 @@ def generate_systemd_service_content(exec_path: str) -> str:
     """Generate systemd service file content for parental-control.service."""
     return f"""[Unit]
 Description=Parental Control Google Sheets Schedule Enforcer & Session Guard
-Documentation=https://github.com/atulmahankal/ParentalControl
+Documentation=https://github.com/atulmahankal/UbuntuParentalControl
 After=network.target network-online.target systemd-logind.service
 Wants=network-online.target systemd-logind.service
 
