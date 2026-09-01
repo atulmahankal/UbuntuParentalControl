@@ -4,40 +4,36 @@ A robust, system-level parental control daemon and login protection application 
 
 ---
 
-## ⚡ One-Line Automatic Installation
+## 🛑 STEP 0: MANDATORY PRE-INSTALLATION PROCESS
+### (Granting Spreadsheet Access to the Application)
 
-You can install and configure Parental Control on Ubuntu with a single command:
+Before installing the application on your Ubuntu computer, you must create your Google Spreadsheet and grant the application read permissions.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo bash
-```
+#### 1. Create Spreadsheet from Template
+1. Open Google Sheets at [sheets.new](https://sheets.new).
+2. Go to **File ➔ Import ➔ Upload** and upload [`google_spreadsheet_template.csv`](./google_spreadsheet_template.csv) (or create the columns manually).
 
-Or provide your Google Sheet URL directly during installation:
+#### 2. Grant Read Permission (Allow Spreadsheet Access)
+To allow the Parental Control application to read the schedule without requiring complicated API credentials:
+1. In the top-right corner of your Google Sheet, click the blue **Share** button.
+2. Under **General access**, change the dropdown from **Restricted** to **"Anyone with the link"**.
+3. Ensure the permission role on the right is set to **"Viewer"** (Read-Only).
+4. Click **Copy link** (e.g. `https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing`).
+5. Save this copied URL — you will supply it during installation.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing" bash
-```
-
-### What `install.sh` does automatically:
-1. Installs all required Ubuntu packages (`python3`, `git`, `curl`, `zenity`, `libnotify-bin`, `libcanberra-gtk-module`).
-2. Installs the Astral **`uv`** package manager.
-3. Clones/installs the application to `/opt/parental-control`.
-4. Builds the virtual environment and links `/usr/local/bin/parentalcontrol`.
-5. Prompts for or saves your Google Sheet URL in `/etc/parental-control/config.yaml`.
-6. Configures, enables, and starts the systemd service `/etc/systemd/system/parental-control.service`.
+> [!IMPORTANT]
+> The application only requires **Viewer (Read-Only)** access. It reads the schedule over HTTPS and never modifies your spreadsheet.
 
 ---
 
-## 👥 Getting the System User List for Google Spreadsheet
+## 👥 Getting Ubuntu Usernames for Your Spreadsheet
 
-To view all human user accounts on your Ubuntu computer (so you can copy their exact usernames into your Google Spreadsheet):
+To ensure your spreadsheet rules match the exact Linux user accounts on your computer:
 
 ```bash
 parentalcontrol list-users
 ```
-
-Or generate **spreadsheet-ready CSV rows** directly:
-
+Or generate **ready-to-copy CSV rows** for your children:
 ```bash
 parentalcontrol list-users --csv
 ```
@@ -55,13 +51,9 @@ parentalcontrol list-users --csv
 ╘════════════════════════╧═════════════╧═══════╧═════════════════════════╛
 ```
 
-*(Alternative Linux shell command: `awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /nologin|false/ {print $1}' /etc/passwd`)*
-
 ---
 
-## 📋 Google Spreadsheet Setup
-
-Create a Google Sheet with the following columns (or import [`google_spreadsheet_template.csv`](./google_spreadsheet_template.csv)):
+## 📋 Google Spreadsheet Format Reference
 
 | User | Day | Start Time | End Time | Allowed | Max Minutes | Message |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -72,7 +64,7 @@ Create a Google Sheet with the following columns (or import [`google_spreadsheet
 | `himanshi` | `Sunday` | `2:00 PM` | `7:00 PM` | `TRUE` | `120` | Sunday afternoon gaming |
 | `*` | `*` | `21:00` | `07:00` | `FALSE` | | Bedtime - Access blocked |
 
-### Column Details:
+### Column Definitions:
 - **`User`**: Child's Ubuntu username (e.g. `himanshu`), or `*` / `all` for all children.
 - **`Day`**: `Monday`, `Tuesday`, `Mon-Fri`, `Weekday`, `Weekend`, `Saturday,Sunday`, `All`, or date `YYYY-MM-DD`.
 - **`Start Time` / `End Time`**: 24-hour (`16:00`) or 12-hour (`4:00 PM`).
@@ -80,25 +72,45 @@ Create a Google Sheet with the following columns (or import [`google_spreadsheet
 - **`Max Minutes`** *(optional)*: Daily screen time quota in minutes or hours (e.g. `120` or `2h`).
 - **`Message`** *(optional)*: Custom note displayed to the child on screen.
 
-### Sharing Your Google Sheet:
-1. Open your spreadsheet on Google Sheets.
-2. Click **Share** (top right) ➔ Change **General access** to **Anyone with the link can view** ➔ Copy the link.
-3. Use this link in `parentalcontrol service-install` or in `/etc/parental-control/config.yaml`.
+---
+
+## ⚡ One-Line Automatic Installation
+
+Once your Google Sheet is shared with "Anyone with the link (Viewer)", install Parental Control with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit?usp=sharing" bash
+```
+
+*(Or simply run `curl -fsSL ... | sudo bash` to be prompted interactively for your Google Sheet URL).*
+
+### What `install.sh` does automatically:
+1. Installs all required Ubuntu packages (`python3`, `git`, `curl`, `zenity`, `libnotify-bin`, `libcanberra-gtk-module`).
+2. Installs the Astral **`uv`** package manager.
+3. Clones and installs the application to `/opt/parental-control`.
+4. Builds the Python virtual environment and creates a global symlink at `/usr/local/bin/parentalcontrol`.
+5. Saves your configuration to `/etc/parental-control/config.yaml`.
+6. Configures, enables, and starts the systemd service `/etc/systemd/system/parental-control.service`.
+7. Installs an **APT auto-upgrade hook** (`/etc/apt/apt.conf.d/99parentalcontrol`).
 
 ---
 
-## 🔄 Upgrading / Updating the Application
+## 🔄 Automatic Upgrades via `sudo apt upgrade`
 
-To upgrade the application to the latest release and restart the service, run:
+You do **not** need to manually upgrade this application. 
+
+The installer registers an APT Post-Invoke hook at `/etc/apt/apt.conf.d/99parentalcontrol`. Whenever you run regular system updates on Ubuntu:
 
 ```bash
-sudo parentalcontrol update
+sudo apt update && sudo apt upgrade
 ```
 
-Alternatively, re-running the installation one-liner will automatically pull updates without overwriting your existing `/etc/parental-control/config.yaml`:
-```bash
-curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master/install.sh | sudo bash
-```
+APT will **automatically**:
+1. Pull the latest release from Git.
+2. Sync dependencies with `uv`.
+3. Seamlessly restart the `parental-control.service` system daemon.
+
+*(Optional manual upgrade command is also available: `sudo parentalcontrol update`)*.
 
 ---
 
@@ -120,8 +132,6 @@ curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master
 ---
 
 ## 🛠️ Manual Installation (from Source)
-
-If you prefer installing manually from git:
 
 ```bash
 # 1. Clone repository
@@ -149,12 +159,12 @@ sudo uv run parentalcontrol service-install --url "https://docs.google.com/sprea
 | **Export system users as CSV rows** | `parentalcontrol list-users --csv` |
 | **Check service status & active sessions** | `parentalcontrol service-status` |
 | **View live system logs** | `sudo journalctl -u parental-control.service -f` |
-| **Upgrade application to latest version** | `sudo parentalcontrol update` |
 | **Restart system service** | `sudo systemctl restart parental-control.service` |
 | **Preview & validate Google Sheet** | `parentalcontrol test-sheet --url "<SHEET_URL>"` |
 | **Check schedule status for a user** | `parentalcontrol status --user himanshu` |
 | **Dry-run login test** | `parentalcontrol check --dry-run --user himanshu` |
-| **Uninstall system service** | `sudo parentalcontrol service-uninstall` |
+| **Manual upgrade check** | `sudo parentalcontrol update` |
+| **Uninstall system service & APT hook** | `sudo parentalcontrol service-uninstall` |
 | **Run unit tests** | `uv run pytest -v` |
 
 ---
@@ -197,7 +207,7 @@ enforcement:
 
 ## 🧪 Automated Testing
 
-Run the automated test suite:
+Run the 22 automated unit and integration tests:
 ```bash
 uv run pytest -v
 ```

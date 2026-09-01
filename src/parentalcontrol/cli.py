@@ -106,6 +106,7 @@ def cmd_service_install(args: argparse.Namespace, config: AppConfig) -> None:
     try:
         service_file = install_system_service(exec_path=exec_path)
         print(f"✅ Systemd service installed at: {service_file}")
+        print("✅ APT auto-upgrade hook installed at: /etc/apt/apt.conf.d/99parentalcontrol")
         print("✅ Systemd service enabled and started via 'systemctl enable --now parental-control.service'!")
         print("\nTo check service logs:")
         print("   sudo journalctl -u parental-control.service -f")
@@ -124,7 +125,7 @@ def cmd_service_uninstall(args: argparse.Namespace, config: AppConfig) -> None:
     try:
         removed = uninstall_system_service()
         if removed:
-            print("✅ System service disabled, stopped, and removed successfully.")
+            print("✅ System service and APT upgrade hook removed successfully.")
         else:
             print("ℹ️ No system service file found.")
     except Exception as e:
@@ -173,29 +174,34 @@ def cmd_update(args: argparse.Namespace, config: AppConfig) -> None:
         print("   sudo parentalcontrol update")
         sys.exit(1)
 
+    quiet = getattr(args, "quiet", False)
     install_dir = Path("/opt/parental-control")
     if not install_dir.exists():
-        # Fallback to directory containing this file
         install_dir = Path(__file__).resolve().parent.parent.parent
 
-    print(f"🔄 Updating Parental Control in {install_dir}...")
+    if not quiet:
+        print(f"🔄 Updating Parental Control in {install_dir}...")
     try:
         if (install_dir / ".git").exists():
-            subprocess.run(["git", "-C", str(install_dir), "pull", "--rebase"], check=True)
-            print("✅ Git repository updated.")
+            subprocess.run(["git", "-C", str(install_dir), "pull", "--rebase", "--quiet"], check=True)
+            if not quiet:
+                print("✅ Git repository updated.")
 
         # Find uv binary
         uv_bin = shutil.which("uv") or "/root/.local/bin/uv"
         if os.path.exists(uv_bin):
-            subprocess.run([uv_bin, "sync", "--frozen"], cwd=str(install_dir), check=False)
-            print("✅ Dependencies synced with uv.")
+            subprocess.run([uv_bin, "sync", "--frozen", "--quiet"], cwd=str(install_dir), check=False)
+            if not quiet:
+                print("✅ Dependencies synced with uv.")
 
         # Restart systemd service
         subprocess.run(["systemctl", "restart", "parental-control.service"], check=False)
-        print("✅ Systemd service 'parental-control.service' restarted successfully.")
-        print("\n🎉 Parental Control successfully upgraded to the latest version!")
+        if not quiet:
+            print("✅ Systemd service 'parental-control.service' restarted successfully.")
+            print("\n🎉 Parental Control successfully upgraded to the latest version!")
     except Exception as e:
-        print(f"❌ Error during update: {e}")
+        if not quiet:
+            print(f"❌ Error during update: {e}")
         sys.exit(1)
 
 
@@ -357,8 +363,8 @@ def cmd_create_template(args: argparse.Namespace) -> None:
 *,Monday-Friday,16:00,20:00,TRUE,120,Weekday homework & screen time
 *,Saturday-Sunday,10:00,12:30,TRUE,150,Weekend morning session
 *,Saturday-Sunday,16:00,20:30,TRUE,180,Weekend evening session
-child1,Friday,15:00,21:00,TRUE,180,Friday reward extended time
-child2,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
+himanshu,Friday,15:00,21:00,TRUE,180,Friday reward extended time
+himanshi,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
 *,*,21:00,07:00,FALSE,,Bedtime - Access blocked
 """
     out_path = Path(args.out) if args.out else Path.cwd() / "google_spreadsheet_template.csv"
@@ -460,6 +466,7 @@ def main() -> None:
 
     # Command: update
     p_update = subparsers.add_parser("update", help="Update application to latest version (requires sudo)")
+    p_update.add_argument("-q", "--quiet", action="store_true", help="Run in quiet mode (used by APT hooks)")
 
     # Command: status
     p_status = subparsers.add_parser("status", help="Show current status and schedule")

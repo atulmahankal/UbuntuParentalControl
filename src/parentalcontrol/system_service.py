@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 SYSTEMD_SERVICE_PATH = Path("/etc/systemd/system/parental-control.service")
 SYSTEM_CONFIG_DIR = Path("/etc/parental-control")
+APT_HOOK_PATH = Path("/etc/apt/apt.conf.d/99parentalcontrol")
 
 
 @dataclass
@@ -303,8 +304,35 @@ WantedBy=multi-user.target
 """
 
 
+def install_apt_upgrade_hook() -> None:
+    """Install an APT hook in /etc/apt/apt.conf.d/99parentalcontrol to auto-upgrade on 'sudo apt upgrade'."""
+    try:
+        hook_dir = Path("/etc/apt/apt.conf.d")
+        if hook_dir.exists():
+            hook_content = """// Automatically upgrade Parental Control when 'apt upgrade' or 'apt-get upgrade' runs
+DPkg::Post-Invoke {
+    "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
+};
+"""
+            with open(APT_HOOK_PATH, "w", encoding="utf-8") as f:
+                f.write(hook_content)
+            os.chmod(APT_HOOK_PATH, 0o644)
+            logger.info("Installed APT auto-upgrade hook at /etc/apt/apt.conf.d/99parentalcontrol")
+    except Exception as e:
+        logger.warning(f"Could not install APT upgrade hook: {e}")
+
+
+def remove_apt_upgrade_hook() -> None:
+    """Remove the APT upgrade hook."""
+    if APT_HOOK_PATH.exists():
+        try:
+            APT_HOOK_PATH.unlink()
+        except Exception:
+            pass
+
+
 def install_system_service(exec_path: Optional[str] = None) -> Path:
-    """Install and enable systemd service."""
+    """Install and enable systemd service and APT auto-upgrade hook."""
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         raise PermissionError("Installing as a system service requires root privileges. Please run with sudo.")
 
@@ -327,6 +355,9 @@ def install_system_service(exec_path: Optional[str] = None) -> Path:
     # Ensure /etc/parental-control directory exists
     SYSTEM_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Install APT auto-upgrade hook so 'sudo apt upgrade' upgrades this app
+    install_apt_upgrade_hook()
+
     # Reload systemd and enable/start service
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "--now", "parental-control.service"], check=True)
@@ -336,7 +367,7 @@ def install_system_service(exec_path: Optional[str] = None) -> Path:
 
 
 def uninstall_system_service() -> bool:
-    """Disable and remove systemd service."""
+    """Disable and remove systemd service and APT hook."""
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         raise PermissionError("Uninstalling the system service requires root privileges. Please run with sudo.")
 
@@ -345,6 +376,8 @@ def uninstall_system_service() -> bool:
         subprocess.run(["systemctl", "disable", "parental-control.service"], check=False)
     except Exception:
         pass
+
+    remove_apt_upgrade_hook()
 
     if SYSTEMD_SERVICE_PATH.exists():
         SYSTEMD_SERVICE_PATH.unlink()

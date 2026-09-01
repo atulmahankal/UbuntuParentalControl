@@ -15,6 +15,7 @@ INSTALL_DIR="/opt/parental-control"
 CONFIG_DIR="/etc/parental-control"
 CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
+APT_HOOK_FILE="/etc/apt/apt.conf.d/99parentalcontrol"
 REPO_URL="${REPO_URL:-https://github.com/atulmahankal/ParentalControl.git}"
 BRANCH="${BRANCH:-master}"
 
@@ -203,20 +204,35 @@ WantedBy=multi-user.target
 SVC_EOF
 
 chmod 644 "${SERVICE_FILE}"
+
+# 9. Configure APT Hook so 'sudo apt upgrade' auto-upgrades Parental Control
+if [ -d "/etc/apt/apt.conf.d" ]; then
+    cat << 'APT_EOF' > "${APT_HOOK_FILE}"
+// Automatically upgrade Parental Control when 'apt upgrade' or 'apt-get upgrade' runs
+DPkg::Post-Invoke {
+    "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
+};
+APT_EOF
+    chmod 644 "${APT_HOOK_FILE}"
+    log_success "Configured APT auto-upgrade hook (/etc/apt/apt.conf.d/99parentalcontrol)."
+fi
+
+# 10. Enable & Start Systemd Service
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}"
 log_success "Systemd service '${SERVICE_NAME}' enabled and started!"
 
-# 9. Verify Installation
+# 11. Print Completion Message
 echo -e "\n${BOLD}============================================================${NC}"
 echo -e "${GREEN}${BOLD}   🎉  Parental Control Successfully Installed & Active!   ${NC}"
 echo -e "${BOLD}============================================================${NC}\n"
 
 echo -e "Useful Commands:"
 echo -e "  • Check service & session status:  ${BOLD}parentalcontrol service-status${NC}"
+echo -e "  • Get user list for spreadsheet:   ${BOLD}parentalcontrol list-users${NC}"
 echo -e "  • View live service logs:          ${BOLD}sudo journalctl -u ${SERVICE_NAME} -f${NC}"
 echo -e "  • Test Google Sheet connection:    ${BOLD}parentalcontrol test-sheet${NC}"
 echo -e "  • Check schedule status:           ${BOLD}parentalcontrol status${NC}"
-echo -e "  • Update/Upgrade application:      ${BOLD}sudo parentalcontrol update${NC}"
+echo -e "  • Auto-upgrade on APT:             ${BOLD}sudo apt upgrade${NC} (automatic)"
 echo -e "  • Edit configuration:              ${BOLD}sudo nano /etc/parental-control/config.yaml${NC}"
 echo ""
