@@ -28,6 +28,65 @@ curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master
 
 ---
 
+## 👥 Getting the System User List for Google Spreadsheet
+
+To view all human user accounts on your Ubuntu computer (so you can copy their exact usernames into your Google Spreadsheet):
+
+```bash
+parentalcontrol list-users
+```
+
+Or generate **spreadsheet-ready CSV rows** directly:
+
+```bash
+parentalcontrol list-users --csv
+```
+
+*Example Output:*
+```
+╒════════════════════════╤═════════════╤═══════╤═════════════════════════╕
+│ Username (for Sheet)   │ Full Name   │   UID │ Current Policy          │
+╞════════════════════════╪═════════════╪═══════╪═════════════════════════╡
+│ atul                   │ Atul        │  1000 │ ⭐ Exempt (Parent/Admin)│
+├────────────────────────┼─────────────┼───────┼─────────────────────────┤
+│ himanshu               │ Himanshu    │  1001 │ 🛡️ Targeted (Monitored) │
+├────────────────────────┼─────────────┼───────┼─────────────────────────┤
+│ himanshi               │ Himanshi    │  1002 │ 🛡️ Targeted (Monitored) │
+╘════════════════════════╧═════════════╧═══════╧═════════════════════════╛
+```
+
+*(Alternative Linux shell command: `awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /nologin|false/ {print $1}' /etc/passwd`)*
+
+---
+
+## 📋 Google Spreadsheet Setup
+
+Create a Google Sheet with the following columns (or import [`google_spreadsheet_template.csv`](./google_spreadsheet_template.csv)):
+
+| User | Day | Start Time | End Time | Allowed | Max Minutes | Message |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `*` | `Monday-Friday` | `16:00` | `20:00` | `TRUE` | `120` | Weekday homework & screen time |
+| `*` | `Saturday-Sunday`| `10:00 AM` | `12:30 PM` | `TRUE` | `150` | Weekend morning session |
+| `*` | `Saturday-Sunday`| `4:00 PM` | `8:30 PM` | `TRUE` | `180` | Weekend evening session |
+| `himanshu` | `Friday` | `15:00` | `21:00` | `TRUE` | `180` | Friday reward extended time |
+| `himanshi` | `Sunday` | `2:00 PM` | `7:00 PM` | `TRUE` | `120` | Sunday afternoon gaming |
+| `*` | `*` | `21:00` | `07:00` | `FALSE` | | Bedtime - Access blocked |
+
+### Column Details:
+- **`User`**: Child's Ubuntu username (e.g. `himanshu`), or `*` / `all` for all children.
+- **`Day`**: `Monday`, `Tuesday`, `Mon-Fri`, `Weekday`, `Weekend`, `Saturday,Sunday`, `All`, or date `YYYY-MM-DD`.
+- **`Start Time` / `End Time`**: 24-hour (`16:00`) or 12-hour (`4:00 PM`).
+- **`Allowed`**: `TRUE` (allowed) or `FALSE` (lockout).
+- **`Max Minutes`** *(optional)*: Daily screen time quota in minutes or hours (e.g. `120` or `2h`).
+- **`Message`** *(optional)*: Custom note displayed to the child on screen.
+
+### Sharing Your Google Sheet:
+1. Open your spreadsheet on Google Sheets.
+2. Click **Share** (top right) ➔ Change **General access** to **Anyone with the link can view** ➔ Copy the link.
+3. Use this link in `parentalcontrol service-install` or in `/etc/parental-control/config.yaml`.
+
+---
+
 ## 🔄 Upgrading / Updating the Application
 
 To upgrade the application to the latest release and restart the service, run:
@@ -60,34 +119,6 @@ curl -fsSL https://raw.githubusercontent.com/atulmahankal/ParentalControl/master
 
 ---
 
-## 📋 Google Spreadsheet Setup
-
-Create a Google Sheet with the following columns (or import [`google_spreadsheet_template.csv`](./google_spreadsheet_template.csv)):
-
-| User | Day | Start Time | End Time | Allowed | Max Minutes | Message |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `*` | `Monday-Friday` | `16:00` | `20:00` | `TRUE` | `120` | Weekday homework & screen time |
-| `*` | `Saturday-Sunday`| `10:00 AM` | `12:30 PM` | `TRUE` | `150` | Weekend morning session |
-| `*` | `Saturday-Sunday`| `4:00 PM` | `8:30 PM` | `TRUE` | `180` | Weekend evening session |
-| `child1` | `Friday` | `15:00` | `21:00` | `TRUE` | `180` | Friday reward extended time |
-| `child2` | `Sunday` | `2:00 PM` | `7:00 PM` | `TRUE` | `120` | Sunday afternoon gaming |
-| `*` | `*` | `21:00` | `07:00` | `FALSE` | | Bedtime - Access blocked |
-
-### Column Details:
-- **`User`**: Child's Linux username (e.g. `child1`), or `*` / `all` for all children.
-- **`Day`**: `Monday`, `Tuesday`, `Mon-Fri`, `Weekday`, `Weekend`, `Saturday,Sunday`, `All`, or date `YYYY-MM-DD`.
-- **`Start Time` / `End Time`**: 24-hour (`16:00`) or 12-hour (`4:00 PM`).
-- **`Allowed`**: `TRUE` (allowed) or `FALSE` (lockout).
-- **`Max Minutes`** *(optional)*: Daily screen time quota in minutes or hours (e.g. `120` or `2h`).
-- **`Message`** *(optional)*: Custom note displayed to the child on screen.
-
-### Sharing Your Google Sheet:
-1. Open your spreadsheet on Google Sheets.
-2. Click **Share** (top right) ➔ Change **General access** to **Anyone with the link can view** ➔ Copy the link.
-3. Use this link in `parentalcontrol service-install` or in `/etc/parental-control/config.yaml`.
-
----
-
 ## 🛠️ Manual Installation (from Source)
 
 If you prefer installing manually from git:
@@ -114,13 +145,15 @@ sudo uv run parentalcontrol service-install --url "https://docs.google.com/sprea
 
 | Action | Command |
 | :--- | :--- |
+| **List system users for spreadsheet** | `parentalcontrol list-users` |
+| **Export system users as CSV rows** | `parentalcontrol list-users --csv` |
 | **Check service status & active sessions** | `parentalcontrol service-status` |
 | **View live system logs** | `sudo journalctl -u parental-control.service -f` |
 | **Upgrade application to latest version** | `sudo parentalcontrol update` |
 | **Restart system service** | `sudo systemctl restart parental-control.service` |
 | **Preview & validate Google Sheet** | `parentalcontrol test-sheet --url "<SHEET_URL>"` |
-| **Check schedule status for current/specific user** | `parentalcontrol status --user child1` |
-| **Dry-run login test** | `parentalcontrol check --dry-run --user child1` |
+| **Check schedule status for a user** | `parentalcontrol status --user himanshu` |
+| **Dry-run login test** | `parentalcontrol check --dry-run --user himanshu` |
 | **Uninstall system service** | `sudo parentalcontrol service-uninstall` |
 | **Run unit tests** | `uv run pytest -v` |
 
@@ -136,7 +169,7 @@ google_sheet:
 
 rules:
   target_users:
-    - "*"         # Wildcard matches all non-exempt users, or specify: ["child1", "child2"]
+    - "*"         # Wildcard matches all non-exempt users, or specify: ["himanshu", "himanshi"]
   exempt_users:
     - "atul"      # Parent admin account (never restricted)
     - "root"
@@ -164,7 +197,7 @@ enforcement:
 
 ## 🧪 Automated Testing
 
-Run the 21 unit and integration tests:
+Run the automated test suite:
 ```bash
 uv run pytest -v
 ```

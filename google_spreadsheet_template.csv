@@ -2,6 +2,6 @@ User,Day,Start Time,End Time,Allowed,Max Minutes,Message
 *,Monday-Friday,16:00,20:00,TRUE,120,Weekday homework & screen time
 *,Saturday-Sunday,10:00,12:30,TRUE,150,Weekend morning session
 *,Saturday-Sunday,16:00,20:30,TRUE,180,Weekend evening session
-child1,Friday,15:00,21:00,TRUE,180,Friday reward extended time
-child2,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
+himanshu,Friday,15:00,21:00,TRUE,180,Friday reward extended time
+himanshi,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
 *,*,21:00,07:00,FALSE,,Bedtime - Access blocked

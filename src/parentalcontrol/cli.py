@@ -3,12 +3,13 @@
 import argparse
 import getpass
 import os
+import pwd
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 from tabulate import tabulate
 
@@ -27,6 +28,50 @@ from parentalcontrol.system_service import (
     uninstall_system_service,
     list_active_sessions,
 )
+
+
+def get_system_users(config: AppConfig) -> List[Dict[str, str]]:
+    """Retrieve human user accounts (UID 1000-59999) from the system."""
+    users = []
+    for p in pwd.getpwall():
+        if 1000 <= p.pw_uid < 60000 and p.pw_shell not in ("/usr/sbin/nologin", "/bin/false"):
+            is_targeted = config.is_user_targeted(p.pw_name)
+            users.append({
+                "username": p.pw_name,
+                "uid": str(p.pw_uid),
+                "fullname": p.pw_gecos.split(",")[0] if p.pw_gecos else p.pw_name,
+                "status": "🛡️ Targeted (Monitored)" if is_targeted else "⭐ Exempt (Parent/Admin)",
+                "is_targeted": is_targeted,
+            })
+    return sorted(users, key=lambda u: int(u["uid"]))
+
+
+def cmd_list_users(args: argparse.Namespace, config: AppConfig) -> None:
+    """List system user accounts to help configure Google Spreadsheet rules."""
+    users = get_system_users(config)
+
+    if args.csv:
+        print("User,Day,Start Time,End Time,Allowed,Max Minutes,Message")
+        for u in users:
+            if u["is_targeted"]:
+                print(f"{u['username']},Monday-Friday,16:00,20:00,TRUE,120,Weekday homework & screen time")
+                print(f"{u['username']},Saturday-Sunday,10:00,13:00,TRUE,180,Weekend morning session")
+        return
+
+    print("\n================ UBUNTU USER ACCOUNTS ================")
+    print("Copy these usernames into the 'User' column of your Google Spreadsheet:\n")
+
+    table = [
+        [u["username"], u["fullname"], u["uid"], u["status"]]
+        for u in users
+    ]
+    headers = ["Username (for Sheet)", "Full Name", "UID", "Current Policy"]
+    print(tabulate(table, headers=headers, tablefmt="fancy_grid"))
+
+    print("\n💡 Spreadsheet Tips:")
+    print("  • Use '*' in the 'User' column to set default rules for all children.")
+    print("  • Use specific usernames (e.g. '" + (users[0]["username"] if users else "child1") + "') to customize rules for a specific child.")
+    print("  • To generate ready-to-copy CSV rows, run: parentalcontrol list-users --csv\n")
 
 
 def cmd_run_service(args: argparse.Namespace, config: AppConfig) -> None:
@@ -394,6 +439,10 @@ def main() -> None:
 
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
+    # Command: list-users
+    p_users = subparsers.add_parser("list-users", help="List system user accounts to update into spreadsheet")
+    p_users.add_argument("--csv", action="store_true", help="Output spreadsheet-ready CSV rows")
+
     # Command: run-service (invoked by systemd)
     p_run_service = subparsers.add_parser("run-service", help="Run the background system service daemon")
 
@@ -443,7 +492,9 @@ def main() -> None:
     # Load configuration
     config = load_config(args.config)
 
-    if args.command == "run-service":
+    if args.command == "list-users":
+        cmd_list_users(args, config)
+    elif args.command == "run-service":
         cmd_run_service(args, config)
     elif args.command == "service-install":
         cmd_service_install(args, config)
