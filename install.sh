@@ -2,9 +2,9 @@
 # ==============================================================================
 # Parental Control for Ubuntu - Automated Installer & Updater
 # Supports one-line install:
-#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/master/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/main/install.sh | sudo bash
 # Or with Google Sheet URL:
-#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/master/install.sh | sudo SHEET_URL="https://docs.google.com/..." bash
+#   curl -fsSL https://raw.githubusercontent.com/atulmahankal/UbuntuParentalControl/main/install.sh | sudo SHEET_URL="https://docs.google.com/..." bash
 # ==============================================================================
 
 set -euo pipefail
@@ -17,7 +17,7 @@ CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 APT_HOOK_FILE="/etc/apt/apt.conf.d/99parentalcontrol"
 REPO_URL="${REPO_URL:-https://github.com/atulmahankal/UbuntuParentalControl.git}"
-BRANCH="${BRANCH:-master}"
+BRANCH="${BRANCH:-main}"
 
 # Colors for output
 RED='\033[0;31m'
