@@ -279,6 +279,15 @@ def terminate_session_by_id_or_user(session_id: str, username: str) -> None:
         except Exception as e:
             logger.warning(f"Failed loginctl terminate-user {username}: {e}")
 
+    # Extra safeguard: ensure any lingering processes of target child are killed
+    if username not in ("root", "admin", "parent"):
+        import time
+        time.sleep(1)
+        try:
+            subprocess.run(["pkill", "-KILL", "-u", username], check=False, timeout=5)
+        except Exception as e:
+            logger.warning(f"pkill fallback for {username}: {e}")
+
 
 def generate_systemd_service_content(exec_path: str) -> str:
     """Generate systemd service file content for parental-control.service."""
