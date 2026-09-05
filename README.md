@@ -161,7 +161,7 @@ APT will **automatically**:
 google_sheet:
   url: "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit"
   sheet_name: null
-  sync_interval_minutes: 3
+  sync_interval_minutes: 3   # Check for spreadsheet updates every N minutes (e.g. set to 1 for faster sync)
 
 rules:
   target_users:
@@ -188,6 +188,15 @@ enforcement:
   termination_grace_seconds: 30
   login_denial_grace_seconds: 15
 ```
+
+### ⏱️ How Long Do Spreadsheet Changes Take to Apply?
+- **Automatic Sync**: By default, the daemon re-syncs with your Google Sheet every **3 minutes** (`sync_interval_minutes: 3`). Any changes made in the sheet (e.g. extending time or blocking access) take effect within 3 minutes automatically.
+- **Faster Sync**: To sync faster, change `sync_interval_minutes: 1` in `/etc/parental-control/config.yaml` to refresh every 60 seconds.
+- **Instant Apply (0 seconds)**: To apply changes immediately without waiting:
+  ```bash
+  sudo systemctl restart parental-control.service
+  ```
+
 
 ---
 
