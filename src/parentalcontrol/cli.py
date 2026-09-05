@@ -198,10 +198,27 @@ def cmd_update(args: argparse.Namespace, config: AppConfig) -> None:
             if not quiet:
                 print("✅ Git repository updated.")
 
+        # Check if Python interpreter in .venv is broken (e.g. after Ubuntu upgrade)
+        venv_python = install_dir / ".venv" / "bin" / "python3"
+        recreate_venv = False
+        if not venv_python.exists():
+            recreate_venv = True
+        else:
+            try:
+                test_proc = subprocess.run([str(venv_python), "--version"], capture_output=True, timeout=5)
+                if test_proc.returncode != 0:
+                    recreate_venv = True
+            except Exception:
+                recreate_venv = True
+
         # Find uv binary
-        uv_bin = shutil.which("uv") or "/root/.local/bin/uv"
+        uv_bin = shutil.which("uv") or "/home/atul/.local/bin/uv" or "/root/.local/bin/uv"
         if os.path.exists(uv_bin):
-            subprocess.run([uv_bin, "sync", "--frozen", "--quiet"], cwd=str(install_dir), check=False)
+            if recreate_venv:
+                subprocess.run([uv_bin, "venv", "--clear", "--python", "/usr/bin/python3"], cwd=str(install_dir), check=False)
+                if not quiet:
+                    print("✅ Virtual environment repaired with system Python 3.")
+            subprocess.run([uv_bin, "sync", "--quiet"], cwd=str(install_dir), check=False)
             if not quiet:
                 print("✅ Dependencies synced with uv.")
 

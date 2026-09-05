@@ -336,22 +336,22 @@ WantedBy=multi-user.target
 
 
 def install_apt_upgrade_hook() -> None:
-    """Install an APT hook in /etc/apt/apt.conf.d/99parentalcontrol to auto-upgrade on 'sudo apt update' and 'sudo apt upgrade'."""
+    """Install an APT hook in /etc/apt/apt.conf.d/99parentalcontrol to auto-upgrade and heal on 'sudo apt update' and 'sudo apt upgrade'."""
     try:
         hook_dir = Path("/etc/apt/apt.conf.d")
         if hook_dir.exists():
-            hook_content = """// Automatically upgrade Parental Control on 'apt update' or 'apt upgrade'
+            hook_content = """// Automatically upgrade and heal Parental Control on 'apt update' or 'apt upgrade'
 APT::Update::Post-Invoke-Success {
-    "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
+    "if [ -d /opt/parental-control/.git ]; then if ! /opt/parental-control/.venv/bin/python3 --version >/dev/null 2>&1; then UV_BIN=$(which uv 2>/dev/null || echo /home/atul/.local/bin/uv); if [ -x \"$UV_BIN\" ]; then (cd /opt/parental-control && \"$UV_BIN\" venv --clear --python /usr/bin/python3 && \"$UV_BIN\" sync) || true; fi; fi; if [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi; fi";
 };
 DPkg::Post-Invoke {
-    "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
+    "if [ -d /opt/parental-control/.git ]; then if ! /opt/parental-control/.venv/bin/python3 --version >/dev/null 2>&1; then UV_BIN=$(which uv 2>/dev/null || echo /home/atul/.local/bin/uv); if [ -x \"$UV_BIN\" ]; then (cd /opt/parental-control && \"$UV_BIN\" venv --clear --python /usr/bin/python3 && \"$UV_BIN\" sync) || true; fi; fi; if [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi; fi";
 };
 """
             with open(APT_HOOK_PATH, "w", encoding="utf-8") as f:
                 f.write(hook_content)
             os.chmod(APT_HOOK_PATH, 0o644)
-            logger.info("Installed APT auto-upgrade hook at /etc/apt/apt.conf.d/99parentalcontrol")
+            logger.info("Installed self-healing APT auto-upgrade hook at /etc/apt/apt.conf.d/99parentalcontrol")
     except Exception as e:
         logger.warning(f"Could not install APT upgrade hook: {e}")
 
