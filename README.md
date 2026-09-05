@@ -82,22 +82,29 @@ parentalcontrol list-users --csv
 
 In your Google Sheet, configure the schedule using the following column format:
 
-| User | Day | Start Time | End Time | Allowed | Max Minutes | Message |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `*` | `Monday-Friday` | `16:00` | `20:00` | `TRUE` | `120` | Weekday homework & screen time |
-| `*` | `Saturday-Sunday`| `10:00 AM` | `12:30 PM` | `TRUE` | `150` | Weekend morning session |
-| `*` | `Saturday-Sunday`| `4:00 PM` | `8:30 PM` | `TRUE` | `180` | Weekend evening session |
-| `himanshu` | `Friday` | `15:00` | `21:00` | `TRUE` | `180` | Friday reward extended time |
-| `himanshi` | `Sunday` | `2:00 PM` | `7:00 PM` | `TRUE` | `120` | Sunday afternoon gaming |
-| `*` | `*` | `21:00` | `07:00` | `FALSE` | | Bedtime - Access blocked |
+| User | Device | Day | Start Time | End Time | Allowed | Max Minutes | Message |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `*` | `*` | `Monday-Friday` | `16:00` | `20:00` | `TRUE` | `120` | Weekday homework & screen time |
+| `*` | `*` | `Saturday-Sunday`| `10:00 AM` | `12:30 PM` | `TRUE` | `150` | Weekend morning session |
+| `*` | `*` | `Saturday-Sunday`| `4:00 PM` | `8:30 PM` | `TRUE` | `180` | Weekend evening session |
+| `himanshu` | `optiplex-3050` | `Friday` | `15:00` | `21:00` | `TRUE` | `180` | Desktop gaming extended reward |
+| `himanshu` | `laptop` | `Friday` | `15:00` | `18:00` | `TRUE` | `60` | Laptop study session only |
+| `himanshi` | `*` | `Sunday` | `2:00 PM` | `7:00 PM` | `TRUE` | `120` | Sunday afternoon gaming |
+| `*` | `*` | `*` | `21:00` | `07:00` | `FALSE` | | Bedtime - Access blocked |
 
 ### Column Definitions:
 - **`User`**: Child's Ubuntu username (e.g. `himanshu`), or `*` / `all` for all children.
+- **`Device`** *(optional)*: Computer name / hostname (e.g. `optiplex-3050`, `laptop`).
+  - **Omitted column, empty cell, or `*`**: Applies to **ALL devices** (100% backward-compatible).
+  - **Specific device name**: Only applies when the child logs into that specific machine.
+  - **Multiple devices**: Separate by commas (e.g. `optiplex-3050, study-laptop`).
+  - **Finding your device name**: Run `hostname` or `parentalcontrol list-users`.
 - **`Day`**: `Monday`, `Tuesday`, `Mon-Fri`, `Weekday`, `Weekend`, `Saturday,Sunday`, `All`, or date `YYYY-MM-DD`.
 - **`Start Time` / `End Time`**: 24-hour (`16:00`) or 12-hour (`4:00 PM`).
 - **`Allowed`**: `TRUE` (allowed) or `FALSE` (lockout).
 - **`Max Minutes`** *(optional)*: Daily screen time quota in minutes or hours (e.g. `120` or `2h`).
 - **`Message`** *(optional)*: Custom note displayed to the child on screen.
+
 
 ---
 
@@ -158,6 +165,8 @@ APT will **automatically**:
 ## ⚙️ Configuration File (`/etc/parental-control/config.yaml`)
 
 ```yaml
+device_name: null            # Optional custom name (defaults to system hostname e.g. optiplex-3050)
+
 google_sheet:
   url: "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit"
   sheet_name: null

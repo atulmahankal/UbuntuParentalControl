@@ -69,3 +69,21 @@ sam,All,17:00,19:30,TRUE,90,Evening only
     r3 = rules[3]
     assert r3.user == "*"
     assert r3.allowed is False
+
+def test_parse_csv_with_device_column():
+    csv_data = """User,Device,Day,Start Time,End Time,Allowed,Max Minutes,Message
+himanshu,optiplex-3050,Monday,16:00,20:00,TRUE,120,Desktop study
+himanshu,,Tuesday,16:00,20:00,TRUE,120,All devices
+himanshi,*,Wednesday,16:00,20:00,TRUE,120,All devices explicit star
+"""
+    client = GoogleSheetClient(sheet_url="")
+    rules = client._parse_csv_content(csv_data)
+    assert len(rules) == 3
+    assert rules[0].user == "himanshu"
+    assert rules[0].device == "optiplex-3050"
+    # Empty device column parses as '*'
+    assert rules[1].user == "himanshu"
+    assert rules[1].device == "*"
+    # Star device column parses as '*'
+    assert rules[2].user == "himanshi"
+    assert rules[2].device == "*"

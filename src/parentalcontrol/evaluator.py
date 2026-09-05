@@ -1,6 +1,7 @@
 """Schedule evaluation engine for Parental Control."""
 
 import re
+import socket
 from datetime import date, datetime, time
 from typing import List, Optional, Set, Tuple
 
@@ -61,34 +62,85 @@ def matches_day(rule_day_str: str, check_date: date) -> bool:
     return False
 
 
+def matches_device(rule_device: str, target_device: str) -> bool:
+    """Check if target_device matches rule_device (case-insensitive).
+    Empty, '*', 'all', 'any', 'default' matches all devices.
+    Also supports comma-separated device names (e.g. 'optiplex-3050, laptop-dell').
+    """
+    if not rule_device or not str(rule_device).strip():
+        return True
+    raw = str(rule_device).strip().lower()
+    if raw in ("*", "all", "any", "default"):
+        return True
+
+    dev = (target_device or "").strip().lower()
+    tokens = [t.strip().lower() for t in re.split(r"[,;/]+", raw) if t.strip()]
+    return dev in tokens or "*" in tokens or "all" in tokens
+
+
+def is_specific_device(rule_device: str) -> bool:
+    """Check if rule defines a specific device rather than a wildcard."""
+    if not rule_device or not str(rule_device).strip():
+        return False
+    raw = str(rule_device).strip().lower()
+    return raw not in ("*", "all", "any", "default")
+
+
+def is_specific_user(rule_user: str) -> bool:
+    """Check if rule defines a specific user rather than a wildcard."""
+    if not rule_user or not str(rule_user).strip():
+        return False
+    raw = str(rule_user).strip().lower()
+    return raw not in ("*", "all", "any", "default")
+
+
 def evaluate_access(
     user: str,
     rules: List[ScheduleRule],
     check_dt: Optional[datetime] = None,
+    device: Optional[str] = None,
     is_cached: bool = False,
     cache_age_seconds: Optional[float] = None,
 ) -> AccessResult:
-    """Evaluate access permission for user at the given datetime."""
+    """Evaluate access permission for user at the given datetime and device."""
     now = check_dt or datetime.now()
     target_user = user.lower().strip()
     check_date = now.date()
     check_time = now.time()
 
-    # Find rules for today: specific user rules first, then fallback to wildcard rules
-    exact_user_rules = [r for r in rules if r.user == target_user]
-    wildcard_rules = [r for r in rules if r.user in ("*", "all", "default")]
+    if not device:
+        try:
+            target_device = socket.gethostname().lower().strip()
+        except Exception:
+            target_device = ""
+    else:
+        target_device = str(device).lower().strip()
 
-    exact_today = [r for r in exact_user_rules if matches_day(r.day, check_date)]
-    wildcard_today = [r for r in wildcard_rules if matches_day(r.day, check_date)]
+    # 1. Filter to rules that apply to this device
+    matching_device_rules = [r for r in rules if matches_device(r.device, target_device)]
 
-    today_rules = exact_today if exact_today else wildcard_today
+    # 2. Filter to rules matching today's day/date
+    today_candidates = [r for r in matching_device_rules if matches_day(r.day, check_date)]
 
-    if not today_rules and not exact_user_rules and not wildcard_rules:
+    # 3. Prioritize rules by specificity:
+    # Tier 1: Specific User AND Specific Device
+    tier1 = [r for r in today_candidates if r.user == target_user and is_specific_device(r.device)]
+    # Tier 2: Specific User AND Wildcard Device
+    tier2 = [r for r in today_candidates if r.user == target_user and not is_specific_device(r.device)]
+    # Tier 3: Wildcard User AND Specific Device
+    tier3 = [r for r in today_candidates if not is_specific_user(r.user) and is_specific_device(r.device)]
+    # Tier 4: Wildcard User AND Wildcard Device
+    tier4 = [r for r in today_candidates if not is_specific_user(r.user) and not is_specific_device(r.device)]
+
+    today_rules = tier1 or tier2 or tier3 or tier4
+
+    if not today_rules and not matching_device_rules:
         return AccessResult(
             is_allowed=False,
-            reason=f"No schedule rules defined.",
+            reason=f"No schedule rules defined for device '{target_device}'.",
             user=user,
             current_time=now,
+            device=target_device,
             is_cached_schedule=is_cached,
             cache_age_seconds=cache_age_seconds,
         )
@@ -116,6 +168,18 @@ def evaluate_access(
             if slot.contains(check_time):
                 explicitly_blocked_msg = r.message or "Access has been disabled by parent."
 
+    # Also check if there is an explicit global block rule for this device that overrides
+    if not explicitly_blocked_msg:
+        global_block_candidates = [
+            r for r in today_candidates
+            if not r.allowed and matches_device(r.device, target_device)
+        ]
+        for r in global_block_candidates:
+            slot = TimeSlot(start_time=r.start_time, end_time=r.end_time, allowed=False)
+            if slot.contains(check_time):
+                explicitly_blocked_msg = r.message or "Access has been disabled by parent."
+                break
+
     # Sort today's allowed slots by start_time
     allowed_slots_today.sort(key=lambda s: s.start_time)
 
@@ -131,6 +195,7 @@ def evaluate_access(
             remaining_minutes=remaining,
             allowed_slots_today=allowed_slots_today,
             custom_message=active_slot.message,
+            device=target_device,
             is_cached_schedule=is_cached,
             cache_age_seconds=cache_age_seconds,
         )
@@ -145,7 +210,7 @@ def evaluate_access(
     if explicitly_blocked_msg:
         reason = explicitly_blocked_msg
     elif not today_rules:
-        reason = "No allowed hours scheduled for today."
+        reason = f"No allowed hours scheduled for today on device '{target_device}'."
     elif not allowed_slots_today:
         reason = "All access is disabled for today."
     else:
@@ -161,6 +226,7 @@ def evaluate_access(
         allowed_slots_today=allowed_slots_today,
         next_slot=next_slot,
         custom_message=explicitly_blocked_msg,
+        device=target_device,
         is_cached_schedule=is_cached,
         cache_age_seconds=cache_age_seconds,
     )

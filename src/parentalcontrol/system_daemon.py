@@ -136,12 +136,14 @@ class SystemParentalControlDaemon:
 
         now = datetime.now()
 
-        # Evaluate rules for this user
+        # Evaluate rules for this user and device
         eval_res = evaluate_access(
             user=username,
             rules=self.cached_rules,
             check_dt=now,
+            device=self.config.effective_device_name,
         )
+
 
         # 1. New Session Initial Check
         if sid not in self.active_monitored:

@@ -49,13 +49,14 @@ def get_system_users(config: AppConfig) -> List[Dict[str, str]]:
 def cmd_list_users(args: argparse.Namespace, config: AppConfig) -> None:
     """List system user accounts to help configure Google Spreadsheet rules."""
     users = get_system_users(config)
+    cur_dev = config.effective_device_name
 
     if args.csv:
-        print("User,Day,Start Time,End Time,Allowed,Max Minutes,Message")
+        print("User,Device,Day,Start Time,End Time,Allowed,Max Minutes,Message")
         for u in users:
             if u["is_targeted"]:
-                print(f"{u['username']},Monday-Friday,16:00,20:00,TRUE,120,Weekday homework & screen time")
-                print(f"{u['username']},Saturday-Sunday,10:00,13:00,TRUE,180,Weekend morning session")
+                print(f"{u['username']},*,Monday-Friday,16:00,20:00,TRUE,120,Weekday homework & screen time")
+                print(f"{u['username']},{cur_dev},Saturday-Sunday,10:00,13:00,TRUE,180,Weekend session on {cur_dev}")
         return
 
     print("\n================ UBUNTU USER ACCOUNTS ================")
@@ -68,9 +69,11 @@ def cmd_list_users(args: argparse.Namespace, config: AppConfig) -> None:
     headers = ["Username (for Sheet)", "Full Name", "UID", "Current Policy"]
     print(tabulate(table, headers=headers, tablefmt="fancy_grid"))
 
+    print(f"\n💻 This Machine's Device Name: {cur_dev}")
     print("\n💡 Spreadsheet Tips:")
+    print(f"  • In the 'Device' column, use '{cur_dev}' to restrict this specific computer.")
+    print("  • Leave 'Device' empty, omit the column, or use '*' to apply rules to ALL devices.")
     print("  • Use '*' in the 'User' column to set default rules for all children.")
-    print("  • Use specific usernames (e.g. '" + (users[0]["username"] if users else "child1") + "') to customize rules for a specific child.")
     print("  • To generate ready-to-copy CSV rows, run: parentalcontrol list-users --csv\n")
 
 
@@ -208,7 +211,8 @@ def cmd_update(args: argparse.Namespace, config: AppConfig) -> None:
 def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
     """Run one-off login access check."""
     user = args.user or getpass.getuser()
-    print(f"Checking parental control access for user '{user}' at {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}...")
+    device = getattr(args, "device", None) or config.effective_device_name
+    print(f"Checking parental control access for user '{user}' on device '{device}' at {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}...")
 
     if not config.is_user_targeted(user):
         print(f"✅ User '{user}' is exempt from parental control.")
@@ -232,6 +236,7 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
         user=user,
         rules=rules,
         check_dt=datetime.now(),
+        device=device,
         is_cached=is_cached,
         cache_age_seconds=age,
     )
@@ -240,11 +245,13 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
         print(f"✅ ACCESS GRANTED")
         print(f"   Active Time Slot: {result.active_slot.formatted_range() if result.active_slot else 'N/A'}")
         print(f"   Remaining Time: {int(result.remaining_minutes)} minutes")
+        print(f"   Device: {result.device}")
         if result.is_cached_schedule:
             print(f"   (Using cached schedule, age: {result.cache_age_seconds:.0f}s)")
     else:
         print(f"⛔ ACCESS DENIED")
         print(f"   Reason: {result.reason}")
+        print(f"   Device: {result.device}")
         if result.allowed_slots_today:
             slots_str = ", ".join(s.formatted_range() for s in result.allowed_slots_today)
             print(f"   Allowed Hours Today: {slots_str}")
@@ -256,8 +263,11 @@ def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
     """Display current parental control status and schedule."""
     user = args.user or getpass.getuser()
     url = args.url or config.google_sheet.url
+    device = getattr(args, "device", None) or config.effective_device_name
+
     print(f"\n================ PARENTAL CONTROL STATUS ================")
     print(f"Current User:        {user}")
+    print(f"Current Device:      {device}")
     print(f"Is Targeted:         {'Yes' if config.is_user_targeted(user) else 'No (Exempt)'}")
     print(f"Google Sheet Source: {url or config.google_sheet.service_account_path or '(Not configured)'}")
     print(f"Current Date/Time:   {datetime.now().strftime('%A, %Y-%m-%d %I:%M:%S %p')}")
@@ -284,6 +294,7 @@ def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
         user=user,
         rules=rules,
         check_dt=datetime.now(),
+        device=device,
         is_cached=is_cached,
         cache_age_seconds=age,
     )
@@ -307,6 +318,7 @@ def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
     table_data = [
         [
             r.user,
+            r.device,
             r.day,
             f"{r.start_time.strftime('%I:%M %p').lstrip('0')} - {r.end_time.strftime('%I:%M %p').lstrip('0')}",
             "✅ Yes" if r.allowed else "❌ No",
@@ -315,7 +327,7 @@ def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
         ]
         for r in rules
     ]
-    headers = ["User", "Day", "Time Slot", "Allowed", "Daily Limit", "Notes"]
+    headers = ["User", "Device", "Day", "Time Slot", "Allowed", "Daily Limit", "Notes"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
     print()
 
@@ -341,6 +353,7 @@ def cmd_test_sheet(args: argparse.Namespace, config: AppConfig) -> None:
         table = [
             [
                 r.user,
+                r.device,
                 r.day,
                 r.start_time.strftime("%I:%M %p").lstrip("0"),
                 r.end_time.strftime("%I:%M %p").lstrip("0"),
@@ -350,7 +363,7 @@ def cmd_test_sheet(args: argparse.Namespace, config: AppConfig) -> None:
             ]
             for r in rules
         ]
-        headers = ["User", "Day", "Start Time", "End Time", "Allowed", "Max Quota", "Message"]
+        headers = ["User", "Device", "Day", "Start Time", "End Time", "Allowed", "Max Quota", "Message"]
         print(tabulate(table, headers=headers, tablefmt="fancy_grid"))
     except Exception as e:
         print(f"❌ Failed to fetch/parse sheet: {e}")
@@ -359,13 +372,14 @@ def cmd_test_sheet(args: argparse.Namespace, config: AppConfig) -> None:
 
 def cmd_create_template(args: argparse.Namespace) -> None:
     """Generate a sample CSV template for Google Sheets."""
-    csv_content = """User,Day,Start Time,End Time,Allowed,Max Minutes,Message
-*,Monday-Friday,16:00,20:00,TRUE,120,Weekday homework & screen time
-*,Saturday-Sunday,10:00,12:30,TRUE,150,Weekend morning session
-*,Saturday-Sunday,16:00,20:30,TRUE,180,Weekend evening session
-himanshu,Friday,15:00,21:00,TRUE,180,Friday reward extended time
-himanshi,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
-*,*,21:00,07:00,FALSE,,Bedtime - Access blocked
+    csv_content = """User,Device,Day,Start Time,End Time,Allowed,Max Minutes,Message
+*,*,Monday-Friday,16:00,20:00,TRUE,120,Weekday homework & screen time
+*,*,Saturday-Sunday,10:00,12:30,TRUE,150,Weekend morning session
+*,*,Saturday-Sunday,16:00,20:30,TRUE,180,Weekend evening session
+himanshu,optiplex-3050,Friday,15:00,21:00,TRUE,180,Desktop gaming reward
+himanshu,laptop,Friday,15:00,18:00,TRUE,60,Laptop homework only
+himanshi,*,Sunday,14:00,19:00,TRUE,120,Sunday afternoon gaming
+*,*,*,21:00,07:00,FALSE,,Bedtime - Access blocked
 """
     out_path = Path(args.out) if args.out else Path.cwd() / "google_spreadsheet_template.csv"
     with open(out_path, "w", encoding="utf-8") as f:
@@ -475,11 +489,13 @@ def main() -> None:
     # Command: status
     p_status = subparsers.add_parser("status", parents=[config_parent_parser], help="Show current status and schedule")
     p_status.add_argument("--user", help="Username to check")
+    p_status.add_argument("--device", help="Device name/hostname to check against")
     p_status.add_argument("--url", help="Override Google Sheet URL")
 
     # Command: check
     p_check = subparsers.add_parser("check", parents=[config_parent_parser], help="Check login permission for a user")
     p_check.add_argument("--user", help="Username to check (defaults to current user)")
+    p_check.add_argument("--device", help="Device name/hostname to check against")
     p_check.add_argument("--url", help="Override Google Sheet URL")
     p_check.add_argument("--dry-run", action="store_true", help="Dry-run test check")
 
@@ -487,6 +503,7 @@ def main() -> None:
     p_test = subparsers.add_parser("test-sheet", parents=[config_parent_parser], help="Test fetching and parsing Google Sheet")
     p_test.add_argument("--url", help="Google Sheet URL to test")
     p_test.add_argument("--sheet", help="Sheet tab name")
+    p_test.add_argument("--device", help="Device name to filter")
 
     # Command: setup
     p_setup = subparsers.add_parser("setup", parents=[config_parent_parser], help="Interactive system service setup wizard")

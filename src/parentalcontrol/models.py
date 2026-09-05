@@ -44,13 +44,14 @@ class TimeSlot:
 @dataclass
 class ScheduleRule:
     """A rule parsed from a single row of the Google Sheet."""
-    user: str  # username, 'all', or '*'
-    day: str   # 'Monday', 'Weekday', 'Weekend', 'All', '2026-09-01', etc.
-    start_time: time
-    end_time: time
+    user: str = "*"  # username, 'all', or '*'
+    day: str = "All"   # 'Monday', 'Weekday', 'Weekend', 'All', '2026-09-01', etc.
+    start_time: time = field(default_factory=lambda: time(0, 0))
+    end_time: time = field(default_factory=lambda: time(23, 59, 59))
     allowed: bool = True
     max_minutes: Optional[int] = None
     message: Optional[str] = None
+    device: str = "*"  # device/computer hostname or '*' for all devices
     raw_row: dict = field(default_factory=dict)
 
 
@@ -66,5 +67,6 @@ class AccessResult:
     allowed_slots_today: List[TimeSlot] = field(default_factory=list)
     next_slot: Optional[TimeSlot] = None
     custom_message: Optional[str] = None
+    device: Optional[str] = None
     is_cached_schedule: bool = False
     cache_age_seconds: Optional[float] = None

@@ -110,3 +110,87 @@ def test_evaluate_access_user_priority():
     # Another user "sam" uses wildcard rule -> 13:00 is allowed
     result_sam = evaluate_access("sam", rules, check_dt=check_dt)
     assert result_sam.is_allowed is True
+
+def test_matches_device():
+    from parentalcontrol.evaluator import matches_device
+    assert matches_device("*", "optiplex-3050") is True
+    assert matches_device("", "optiplex-3050") is True
+    assert matches_device("all", "optiplex-3050") is True
+    assert matches_device("optiplex-3050", "optiplex-3050") is True
+    assert matches_device("OptiPlex-3050", "optiplex-3050") is True
+    assert matches_device("optiplex-3050", "OptiPlex-3050") is True
+    assert matches_device("optiplex-3050, dell-laptop", "dell-laptop") is True
+    assert matches_device("optiplex-3050, dell-laptop", "hp-pc") is False
+    assert matches_device("laptop", "optiplex-3050") is False
+
+
+def test_evaluate_access_device_specific_rules():
+    rules = [
+        # Himanshu on Desktop has 10:00 - 12:00
+        ScheduleRule(
+            user="himanshu",
+            device="desktop-pc",
+            day="All",
+            start_time=time(10, 0),
+            end_time=time(12, 0),
+            allowed=True,
+            message="Desktop study session",
+        ),
+        # Himanshu on Laptop has 14:00 - 16:00
+        ScheduleRule(
+            user="himanshu",
+            device="laptop",
+            day="All",
+            start_time=time(14, 0),
+            end_time=time(16, 0),
+            allowed=True,
+            message="Laptop afternoon session",
+        ),
+    ]
+
+    check_dt_morning = datetime(2026, 9, 1, 11, 0)
+    # On desktop-pc at 11:00 AM -> Allowed
+    res_desktop = evaluate_access("himanshu", rules, check_dt=check_dt_morning, device="desktop-pc")
+    assert res_desktop.is_allowed is True
+    assert "Desktop study session" in res_desktop.reason or res_desktop.custom_message == "Desktop study session"
+
+    # On laptop at 11:00 AM -> Denied (laptop rule starts at 14:00)
+    res_laptop_morning = evaluate_access("himanshu", rules, check_dt=check_dt_morning, device="laptop")
+    assert res_laptop_morning.is_allowed is False
+
+    # On laptop at 15:00 (3:00 PM) -> Allowed
+    check_dt_afternoon = datetime(2026, 9, 1, 15, 0)
+    res_laptop_afternoon = evaluate_access("himanshu", rules, check_dt=check_dt_afternoon, device="laptop")
+    assert res_laptop_afternoon.is_allowed is True
+
+
+def test_evaluate_access_device_fallback_and_wildcard():
+    rules = [
+        # Global fallback for all users and all devices
+        ScheduleRule(
+            user="*",
+            device="*",
+            day="All",
+            start_time=time(16, 0),
+            end_time=time(18, 0),
+            allowed=True,
+        ),
+        # Specific override for gaming PC
+        ScheduleRule(
+            user="*",
+            device="gaming-rig",
+            day="All",
+            start_time=time(18, 0),
+            end_time=time(20, 0),
+            allowed=True,
+        ),
+    ]
+
+    check_dt = datetime(2026, 9, 1, 17, 0)
+    # Normal laptop at 17:00 -> Matches global rule (16:00 - 18:00)
+    res_laptop = evaluate_access("himanshu", rules, check_dt=check_dt, device="normal-laptop")
+    assert res_laptop.is_allowed is True
+
+    # Gaming rig at 17:00 -> Gaming rig has specific device rule (18:00 - 20:00) which takes precedence over wildcard
+    res_gaming = evaluate_access("himanshu", rules, check_dt=check_dt, device="gaming-rig")
+    assert res_gaming.is_allowed is False

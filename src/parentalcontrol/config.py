@@ -2,6 +2,7 @@
 
 import os
 import getpass
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -51,7 +52,18 @@ class AppConfig:
     rules: RulesConfig = field(default_factory=RulesConfig)
     warnings: WarningsConfig = field(default_factory=WarningsConfig)
     enforcement: EnforcementConfig = field(default_factory=EnforcementConfig)
+    device_name: Optional[str] = None
     config_file_path: Optional[Path] = None
+
+    @property
+    def effective_device_name(self) -> str:
+        """Return configured device_name or system hostname (lowercase stripped)."""
+        if self.device_name and str(self.device_name).strip():
+            return str(self.device_name).strip().lower()
+        try:
+            return socket.gethostname().lower().strip()
+        except Exception:
+            return "ubuntu"
 
     @property
     def is_system_level(self) -> bool:
@@ -137,6 +149,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                 logout_command=enf_data.get("logout_command"),
                 lock_command=enf_data.get("lock_command"),
             ),
+            device_name=data.get("device_name"),
             config_file_path=path,
         )
         return cfg
@@ -153,6 +166,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
+        "device_name": config.device_name,
         "google_sheet": {
             "url": config.google_sheet.url,
             "service_account_path": config.google_sheet.service_account_path,

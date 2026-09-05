@@ -271,6 +271,8 @@ class GoogleSheetClient:
                 header_map["allowed"] = key
             elif any(w in k_clean for w in ("max minutes", "max_minutes", "daily limit", "limit", "max hours", "quota", "duration", "daily quota")):
                 header_map["max_minutes"] = key
+            elif any(w in k_clean for w in ("device", "computer", "hostname", "machine", "pc", "host")):
+                header_map["device"] = key
             elif any(w in k_clean for w in ("message", "notes", "reason", "comment", "note", "msg")):
                 header_map["message"] = key
 
@@ -283,6 +285,9 @@ class GoogleSheetClient:
             end_val = str(row.get(header_map.get("end_time", "End Time"), "23:59")).strip()
             allowed_val = row.get(header_map.get("allowed", "Allowed"), "True")
             max_val = row.get(header_map.get("max_minutes", "Max Minutes"), "")
+            device_val = str(row.get(header_map.get("device", "Device"), "*")).strip()
+            if not device_val:
+                device_val = "*"
             msg_val = str(row.get(header_map.get("message", "Message"), "")).strip() or None
 
             # Skip empty rows
@@ -301,6 +306,7 @@ class GoogleSheetClient:
                 end_time=end_t,
                 allowed=allowed,
                 max_minutes=max_mins,
+                device=device_val.lower(),
                 message=msg_val,
                 raw_row=dict(row),
             )
@@ -322,6 +328,7 @@ class GoogleSheetClient:
                         "end_time": r.end_time.strftime("%H:%M:%S"),
                         "allowed": r.allowed,
                         "max_minutes": r.max_minutes,
+                        "device": r.device,
                         "message": r.message,
                         "raw_row": r.raw_row,
                     }
@@ -355,6 +362,7 @@ class GoogleSheetClient:
                     end_time=et,
                     allowed=item.get("allowed", True),
                     max_minutes=item.get("max_minutes"),
+                    device=item.get("device", "*"),
                     message=item.get("message"),
                     raw_row=item.get("raw_row", {}),
                 )
@@ -363,3 +371,4 @@ class GoogleSheetClient:
         except Exception as e:
             logger.warning(f"Failed to read cache from {self.cache_path}: {e}")
             return [], 0.0
+
