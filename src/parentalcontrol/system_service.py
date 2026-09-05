@@ -314,11 +314,14 @@ WantedBy=multi-user.target
 
 
 def install_apt_upgrade_hook() -> None:
-    """Install an APT hook in /etc/apt/apt.conf.d/99parentalcontrol to auto-upgrade on 'sudo apt upgrade'."""
+    """Install an APT hook in /etc/apt/apt.conf.d/99parentalcontrol to auto-upgrade on 'sudo apt update' and 'sudo apt upgrade'."""
     try:
         hook_dir = Path("/etc/apt/apt.conf.d")
         if hook_dir.exists():
-            hook_content = """// Automatically upgrade Parental Control when 'apt upgrade' or 'apt-get upgrade' runs
+            hook_content = """// Automatically upgrade Parental Control on 'apt update' or 'apt upgrade'
+APT::Update::Post-Invoke-Success {
+    "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
+};
 DPkg::Post-Invoke {
     "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
 };
@@ -329,6 +332,7 @@ DPkg::Post-Invoke {
             logger.info("Installed APT auto-upgrade hook at /etc/apt/apt.conf.d/99parentalcontrol")
     except Exception as e:
         logger.warning(f"Could not install APT upgrade hook: {e}")
+
 
 
 def remove_apt_upgrade_hook() -> None:

@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 
 from tabulate import tabulate
 
+from parentalcontrol import __version__
 from parentalcontrol.config import (
     AppConfig,
     load_config,
@@ -459,6 +460,12 @@ def main() -> None:
         prog="parentalcontrol",
         parents=[config_parent_parser],
         description="Parental Control login guard and system service daemon for Ubuntu via Google Sheets.",
+    )
+    parser.add_argument(
+        "-v", "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show program's version number and exit",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")

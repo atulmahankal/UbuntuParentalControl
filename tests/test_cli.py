@@ -40,3 +40,15 @@ def test_get_system_users():
         assert "username" in users[0]
         assert "uid" in users[0]
         assert "status" in users[0]
+
+def test_cli_version_flag(capsys):
+    from parentalcontrol import __version__
+    import sys
+    from parentalcontrol.cli import main
+
+    with patch.object(sys, "argv", ["parentalcontrol", "-v"]):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert __version__ in captured.out or __version__ in captured.err

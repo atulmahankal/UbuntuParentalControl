@@ -205,10 +205,13 @@ SVC_EOF
 
 chmod 644 "${SERVICE_FILE}"
 
-# 9. Configure APT Hook so 'sudo apt upgrade' auto-upgrades Parental Control
+# 9. Configure APT Hook so 'sudo apt update' and 'sudo apt upgrade' auto-upgrade Parental Control
 if [ -d "/etc/apt/apt.conf.d" ]; then
     cat << 'APT_EOF' > "${APT_HOOK_FILE}"
-// Automatically upgrade Parental Control when 'apt upgrade' or 'apt-get upgrade' runs
+// Automatically upgrade Parental Control on 'apt update' or 'apt upgrade'
+APT::Update::Post-Invoke-Success {
+    "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
+};
 DPkg::Post-Invoke {
     "if [ -d /opt/parental-control/.git ] && [ -x /usr/local/bin/parentalcontrol ]; then /usr/local/bin/parentalcontrol update --quiet || true; fi";
 };
@@ -216,6 +219,7 @@ APT_EOF
     chmod 644 "${APT_HOOK_FILE}"
     log_success "Configured APT auto-upgrade hook (/etc/apt/apt.conf.d/99parentalcontrol)."
 fi
+
 
 # 10. Enable & Start Systemd Service
 systemctl daemon-reload

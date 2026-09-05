@@ -108,14 +108,16 @@ In your Google Sheet, configure the schedule using the following column format:
 
 ---
 
-## 🔄 Automatic Upgrades via `sudo apt upgrade`
+## 🔄 Automatic Upgrades via `sudo apt update` & `sudo apt upgrade`
 
 You do **not** need to manually upgrade this application. 
 
-The installer registers an APT Post-Invoke hook at `/etc/apt/apt.conf.d/99parentalcontrol`. Whenever you run regular system updates on Ubuntu:
+The installer registers APT hooks at `/etc/apt/apt.conf.d/99parentalcontrol`. Whenever you run system updates on Ubuntu:
 
 ```bash
-sudo apt update && sudo apt upgrade
+sudo apt update
+# or
+sudo apt upgrade
 ```
 
 APT will **automatically**:
@@ -148,6 +150,7 @@ APT will **automatically**:
 
 | Action | Command |
 | :--- | :--- |
+| **Check application version** | `parentalcontrol -v` or `parentalcontrol --version` |
 | **List system users for spreadsheet** | `parentalcontrol list-users` |
 | **Export system users as CSV rows** | `parentalcontrol list-users --csv` |
 | **Check service status & active sessions** | `parentalcontrol service-status` |
@@ -159,6 +162,7 @@ APT will **automatically**:
 | **Manual upgrade check** | `sudo parentalcontrol update` |
 | **Uninstall system service & APT hook** | `sudo parentalcontrol service-uninstall` |
 | **Run unit tests** | `uv run pytest -v` |
+
 
 ---
 
