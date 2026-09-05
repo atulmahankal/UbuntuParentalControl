@@ -433,65 +433,69 @@ def cmd_setup(args: argparse.Namespace, config: AppConfig) -> None:
 
 def main() -> None:
     """Main CLI entrypoint."""
-    parser = argparse.ArgumentParser(
-        prog="parentalcontrol",
-        description="Parental Control login guard and system service daemon for Ubuntu via Google Sheets.",
-    )
-    parser.add_argument(
+    # Common argument parser for --config flag (can be used before or after any subcommand)
+    config_parent_parser = argparse.ArgumentParser(add_help=False)
+    config_parent_parser.add_argument(
         "-c", "--config",
         type=Path,
         help="Path to custom config.yaml file",
     )
 
+    parser = argparse.ArgumentParser(
+        prog="parentalcontrol",
+        parents=[config_parent_parser],
+        description="Parental Control login guard and system service daemon for Ubuntu via Google Sheets.",
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # Command: list-users
-    p_users = subparsers.add_parser("list-users", help="List system user accounts to update into spreadsheet")
+    p_users = subparsers.add_parser("list-users", parents=[config_parent_parser], help="List system user accounts to update into spreadsheet")
     p_users.add_argument("--csv", action="store_true", help="Output spreadsheet-ready CSV rows")
 
     # Command: run-service (invoked by systemd)
-    p_run_service = subparsers.add_parser("run-service", help="Run the background system service daemon")
+    subparsers.add_parser("run-service", parents=[config_parent_parser], help="Run the background system service daemon")
 
     # Command: service-install
-    p_s_install = subparsers.add_parser("service-install", help="Install and activate systemd service (requires sudo)")
+    p_s_install = subparsers.add_parser("service-install", parents=[config_parent_parser], help="Install and activate systemd service (requires sudo)")
     p_s_install.add_argument("--url", help="Google Sheet URL")
     p_s_install.add_argument("--target-users", help="Comma-separated target usernames")
     p_s_install.add_argument("--exempt-users", help="Comma-separated exempt usernames")
 
     # Command: service-uninstall
-    p_s_uninstall = subparsers.add_parser("service-uninstall", help="Stop and remove systemd service (requires sudo)")
+    subparsers.add_parser("service-uninstall", parents=[config_parent_parser], help="Stop and remove systemd service (requires sudo)")
 
     # Command: service-status
-    p_s_status = subparsers.add_parser("service-status", help="Check system service and active sessions")
+    subparsers.add_parser("service-status", parents=[config_parent_parser], help="Check system service and active sessions")
 
     # Command: update
-    p_update = subparsers.add_parser("update", help="Update application to latest version (requires sudo)")
+    p_update = subparsers.add_parser("update", parents=[config_parent_parser], help="Update application to latest version (requires sudo)")
     p_update.add_argument("-q", "--quiet", action="store_true", help="Run in quiet mode (used by APT hooks)")
 
     # Command: status
-    p_status = subparsers.add_parser("status", help="Show current status and schedule")
+    p_status = subparsers.add_parser("status", parents=[config_parent_parser], help="Show current status and schedule")
     p_status.add_argument("--user", help="Username to check")
     p_status.add_argument("--url", help="Override Google Sheet URL")
 
     # Command: check
-    p_check = subparsers.add_parser("check", help="Check login permission for a user")
+    p_check = subparsers.add_parser("check", parents=[config_parent_parser], help="Check login permission for a user")
     p_check.add_argument("--user", help="Username to check (defaults to current user)")
     p_check.add_argument("--url", help="Override Google Sheet URL")
     p_check.add_argument("--dry-run", action="store_true", help="Dry-run test check")
 
     # Command: test-sheet
-    p_test = subparsers.add_parser("test-sheet", help="Test fetching and parsing Google Sheet")
+    p_test = subparsers.add_parser("test-sheet", parents=[config_parent_parser], help="Test fetching and parsing Google Sheet")
     p_test.add_argument("--url", help="Google Sheet URL to test")
     p_test.add_argument("--sheet", help="Sheet tab name")
 
     # Command: setup
-    p_setup = subparsers.add_parser("setup", help="Interactive system service setup wizard")
+    p_setup = subparsers.add_parser("setup", parents=[config_parent_parser], help="Interactive system service setup wizard")
     p_setup.add_argument("--url", help="Google Sheet URL")
     p_setup.add_argument("--target-users", help="Comma-separated target usernames")
     p_setup.add_argument("--exempt-users", help="Comma-separated exempt usernames")
 
     # Command: create-template
-    p_template = subparsers.add_parser("create-template", help="Generate sample CSV template")
+    p_template = subparsers.add_parser("create-template", parents=[config_parent_parser], help="Generate sample CSV template")
     p_template.add_argument("-o", "--out", help="Output file path")
 
     args = parser.parse_args()

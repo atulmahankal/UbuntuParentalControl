@@ -10,7 +10,6 @@ import yaml
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "parental-control"
 SYSTEM_CONFIG_DIR = Path("/etc/parental-control")
-SYSTEM_CACHE_DIR = Path("/var/cache/parental-control")
 SYSTEM_LOG_DIR = Path("/var/log")
 
 
@@ -62,23 +61,25 @@ class AppConfig:
 
     @property
     def cache_file_path(self) -> Path:
-        if self.is_system_level:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
             return SYSTEM_CONFIG_DIR / "schedule_cache.json"
         return DEFAULT_CONFIG_DIR / "schedule_cache.json"
 
     @property
     def log_file_path(self) -> Path:
-        if self.is_system_level:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
             return SYSTEM_LOG_DIR / "parental-control.log"
         return DEFAULT_CONFIG_DIR / "parental_control.log"
 
     def is_user_targeted(self, username: Optional[str] = None) -> bool:
-        user = username or getpass.getuser()
-        if user in self.rules.exempt_users:
+        user = (username or getpass.getuser()).lower().strip()
+        exempt = [u.lower().strip() for u in self.rules.exempt_users]
+        if user in exempt:
             return False
-        if not self.rules.target_users or "*" in self.rules.target_users or "all" in self.rules.target_users:
+        targets = [u.lower().strip() for u in self.rules.target_users]
+        if not targets or "*" in targets or "all" in targets:
             return True
-        return user in self.rules.target_users
+        return user in targets
 
 
 def get_default_config_path() -> Path:
