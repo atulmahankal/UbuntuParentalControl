@@ -178,11 +178,17 @@ google_sheet:
 
 rules:
   target_users:
-    - "*"         # Wildcard matches all non-exempt users, or specify: ["himanshu", "himanshi"]
+    # Explicit child usernames (wildcard '*' is NOT allowed in system service mode):
+    - "himanshu"
+    - "himanshi"
   exempt_users:
     - "atul"      # Parent admin account (never restricted)
     - "root"
     - "admin"
+    - "parent"
+    - "gdm"       # Display manager greeters (must remain exempt)
+    - "lightdm"
+    - "sddm"
   offline_policy: "allow_cached"
   offline_grace_minutes: 15
 
@@ -209,6 +215,16 @@ enforcement:
   ```bash
   sudo systemctl restart parental-control.service
   ```
+
+---
+
+## ⚠️ Known Issue & Safety Guardrails
+
+### GDM Greeter & Wildcard `target_users: ['*']`
+- **What happened**: Ubuntu's login screen (GNOME Display Manager) runs as the system user `gdm` (UID 128). If `target_users` in `/etc/parental-control/config.yaml` was set to `*` without explicitly exempting `gdm`, the background daemon would detect the login greeter as an unauthorized user session outside scheduled hours. It would play warning beeps (`canberra-gtk-play -i dialog-warning`) and terminate `gdm`. When a user attempted to log in during this crash loop, the user's session was created in the background while GDM restarted, causing the error **"session already active"** and blocking logins across reboots.
+- **Automatic Service Halting on Wildcard**: The system service **automatically halts and refuses to start** (`sys.exit(1)`) if `target_users` contains `*` or `all` or is left empty. This prevents misconfiguration from ever breaking system login.
+- **Built-in System Account Protection**: All system accounts (`UID < 1000`) and display manager users (`gdm`, `gdm3`, `lightdm`, `sddm`, `daemon`, `nobody`) are permanently exempt. The service will refuse to track, alert, or terminate any system user.
+- **Resolution**: Specify explicit child usernames in `rules.target_users` (e.g. `['himanshu', 'himanshi']`) and ensure parent admins and display managers (`gdm`, `lightdm`, `sddm`) are in `rules.exempt_users`.
 
 
 ---

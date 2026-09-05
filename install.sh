@@ -130,11 +130,26 @@ if [ ! -f "${CONFIG_FILE}" ]; then
         read -r -p "Google Sheet URL: " SHEET_URL || SHEET_URL=""
     fi
 
-    TARGET_USER="${TARGET_USER:-*}"
     CURRENT_SUDO_USER="${SUDO_USER:-}"
-    EXEMPT_USERS="root,admin,parent"
+    EXEMPT_USERS="root,admin,parent,gdm,lightdm,sddm"
     if [ -n "${CURRENT_SUDO_USER}" ] && [ "${CURRENT_SUDO_USER}" != "root" ]; then
         EXEMPT_USERS="${EXEMPT_USERS},${CURRENT_SUDO_USER}"
+    fi
+
+    # Auto-detect non-sudo human user accounts (UID 1000-59999)
+    DETECTED_USERS=$(awk -F: -v su="${CURRENT_SUDO_USER}" '$3 >= 1000 && $3 < 60000 && $1 != su && $7 !~ /nologin|false/ {print $1}' /etc/passwd | tr '\n' ',' | sed 's/,$//')
+
+    TARGET_USERS_LIST="${TARGET_USER:-${DETECTED_USERS}}"
+    if [ -z "${TARGET_USERS_LIST}" ] || [ "${TARGET_USERS_LIST}" = "*" ]; then
+        if [ -n "${DETECTED_USERS}" ]; then
+            TARGET_USERS_LIST="${DETECTED_USERS}"
+        fi
+    fi
+
+    if [ -n "${TARGET_USERS_LIST}" ] && [ "${TARGET_USERS_LIST}" != "*" ]; then
+        TARGET_YAML=$(echo "${TARGET_USERS_LIST}" | tr ',' '\n' | sed 's/^/    - "/; s/$/"/')
+    else
+        TARGET_YAML="    # - \"child1\""
     fi
 
     EXEMPT_YAML=$(echo "${EXEMPT_USERS}" | tr ',' '\n' | sed 's/^/    - "/; s/$/"/')
@@ -147,7 +162,7 @@ google_sheet:
 
 rules:
   target_users:
-    - "${TARGET_USER}"
+${TARGET_YAML}
   exempt_users:
 ${EXEMPT_YAML}
   offline_policy: "allow_cached"

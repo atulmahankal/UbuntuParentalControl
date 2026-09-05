@@ -11,6 +11,8 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+from parentalcontrol.config import SYSTEM_EXEMPT_USERS
+
 SYSTEMD_SERVICE_PATH = Path("/etc/systemd/system/parental-control.service")
 SYSTEM_CONFIG_DIR = Path("/etc/parental-control")
 APT_HOOK_PATH = Path("/etc/apt/apt.conf.d/99parentalcontrol")
@@ -61,6 +63,9 @@ def list_active_sessions() -> List[UserSession]:
             # Fetch detailed session properties
             sess_info = _get_session_details(sess_id, uid, username, seat)
             if sess_info and sess_info.state in ("active", "online"):
+                # Safety check: Ignore system accounts and display managers (UID < 1000, gdm, lightdm, etc.)
+                if sess_info.uid < 1000 or sess_info.username.lower() in SYSTEM_EXEMPT_USERS:
+                    continue
                 sessions.append(sess_info)
 
     return sessions
@@ -131,6 +136,9 @@ def run_in_user_session(
     async_proc: bool = False,
 ) -> Optional[subprocess.Popen]:
     """Execute a command (such as notify-send or zenity) inside a user's GUI session."""
+    if uid < 1000 or username.lower().strip() in SYSTEM_EXEMPT_USERS:
+        return None
+
     user_env = _get_user_env(uid, username)
 
     # Use sudo -u <user> or su if running as root
@@ -268,6 +276,18 @@ def play_user_sound(uid: int, username: str, sound_name: str = "dialog-warning")
 
 def terminate_session_by_id_or_user(session_id: str, username: str) -> None:
     """Terminate the user session using systemd loginctl."""
+    user_lower = username.lower().strip()
+    if user_lower in SYSTEM_EXEMPT_USERS:
+        logger.warning(f"Safety guard: refusing to terminate system/exempt user '{username}'.")
+        return
+    try:
+        import pwd
+        if pwd.getpwnam(username).pw_uid < 1000:
+            logger.warning(f"Safety guard: refusing to terminate system account UID < 1000: '{username}'.")
+            return
+    except Exception:
+        pass
+
     logger.info(f"Terminating session {session_id} for user '{username}'...")
     if shutil.which("loginctl"):
         try:
@@ -279,12 +299,14 @@ def terminate_session_by_id_or_user(session_id: str, username: str) -> None:
         except Exception as e:
             logger.warning(f"Failed loginctl terminate-user {username}: {e}")
 
-    # Extra safeguard: ensure any lingering processes of target child are killed
-    if username not in ("root", "admin", "parent"):
-        import time
-        time.sleep(1)
+    # Extra safeguard: ensure any lingering processes of target child are killed (NEVER for system users)
+    if user_lower not in SYSTEM_EXEMPT_USERS:
         try:
-            subprocess.run(["pkill", "-KILL", "-u", username], check=False, timeout=5)
+            import pwd
+            if pwd.getpwnam(username).pw_uid >= 1000:
+                import time
+                time.sleep(1)
+                subprocess.run(["pkill", "-KILL", "-u", username], check=False, timeout=5)
         except Exception as e:
             logger.warning(f"pkill fallback for {username}: {e}")
 

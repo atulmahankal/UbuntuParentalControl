@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Set
 
-from parentalcontrol.config import AppConfig, load_config
+from parentalcontrol.config import AppConfig, SYSTEM_EXEMPT_USERS, load_config
 from parentalcontrol.evaluator import evaluate_access
 from parentalcontrol.models import AccessResult, ScheduleRule
 from parentalcontrol.sheet_client import GoogleSheetClient
@@ -57,10 +57,23 @@ class SystemParentalControlDaemon:
         self._setup_logging()
         logger.info("=======================================================")
         logger.info("Parental Control System Service Daemon starting...")
-        logger.info(f"Target users: {self.config.rules.target_users or 'ALL non-exempt'}")
+        logger.info(f"Target users: {self.config.rules.target_users}")
         logger.info(f"Exempt users: {self.config.rules.exempt_users}")
         logger.info(f"Config path: {self.config.config_file_path}")
         logger.info("=======================================================")
+
+        # Safety Check: Disallow wildcard '*' in service mode to prevent locking out GDM/system accounts
+        if self.config.has_wildcard_target_users():
+            err_msg = (
+                "CRITICAL CONFIGURATION ERROR: 'target_users: [*]' is not permitted in system service mode. "
+                "Wildcard targeting can match system display managers (such as GDM) and cause login lockout loops. "
+                f"Please specify explicit child usernames in {self.config.config_file_path or '/etc/parental-control/config.yaml'} "
+                "(e.g. target_users: ['himanshu', 'himanshi']). "
+                "The Parental Control service is safely stopping."
+            )
+            logger.critical(err_msg)
+            print(f"\n❌ {err_msg}\n", file=sys.stderr)
+            sys.exit(1)
 
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -129,6 +142,10 @@ class SystemParentalControlDaemon:
         username = session.username
         uid = session.uid
         sid = session.session_id
+
+        # Skip system accounts and display managers (UID < 1000, gdm, lightdm, etc.)
+        if uid < 1000 or username.lower().strip() in SYSTEM_EXEMPT_USERS:
+            return
 
         # Skip exempt accounts (e.g. root, parent admin)
         if not self.config.is_user_targeted(username):

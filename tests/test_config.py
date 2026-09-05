@@ -27,3 +27,31 @@ def test_user_targeting():
     assert cfg.is_user_targeted("parent") is False
     assert cfg.is_user_targeted("root") is False
     assert cfg.is_user_targeted("someone_else") is False
+
+
+def test_system_users_never_targeted():
+    # Even if target_users is '*', system users like gdm, lightdm, root must NEVER be targeted
+    cfg = AppConfig(
+        rules=RulesConfig(target_users=["*"], exempt_users=["parent"])
+    )
+    assert cfg.is_user_targeted("gdm") is False
+    assert cfg.is_user_targeted("gdm3") is False
+    assert cfg.is_user_targeted("lightdm") is False
+    assert cfg.is_user_targeted("sddm") is False
+    assert cfg.is_user_targeted("root") is False
+    assert cfg.is_user_targeted("nobody") is False
+    assert cfg.is_user_targeted("daemon") is False
+
+
+def test_has_wildcard_target_users():
+    cfg_wildcard = AppConfig(rules=RulesConfig(target_users=["*"]))
+    assert cfg_wildcard.has_wildcard_target_users() is True
+
+    cfg_all = AppConfig(rules=RulesConfig(target_users=["all"]))
+    assert cfg_all.has_wildcard_target_users() is True
+
+    cfg_empty = AppConfig(rules=RulesConfig(target_users=[]))
+    assert cfg_empty.has_wildcard_target_users() is True
+
+    cfg_explicit = AppConfig(rules=RulesConfig(target_users=["himanshu", "himanshi"]))
+    assert cfg_explicit.has_wildcard_target_users() is False

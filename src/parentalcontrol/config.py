@@ -22,10 +22,30 @@ class GoogleSheetConfig:
     sync_interval_minutes: int = 3
 
 
+SYSTEM_EXEMPT_USERS = {
+    "root",
+    "admin",
+    "parent",
+    "gdm",
+    "gdm3",
+    "lightdm",
+    "sddm",
+    "nobody",
+    "daemon",
+    "sys",
+    "bin",
+    "gnome-initial-setup",
+    "systemd-coredump",
+    "systemd-resolve",
+    "systemd-timesync",
+    "systemd-network",
+}
+
+
 @dataclass
 class RulesConfig:
     target_users: List[str] = field(default_factory=list)
-    exempt_users: List[str] = field(default_factory=lambda: ["root", "admin", "parent"])
+    exempt_users: List[str] = field(default_factory=lambda: ["root", "admin", "parent", "gdm", "lightdm", "sddm"])
     offline_policy: str = "allow_cached"  # "allow_cached", "block", "grace_period"
     offline_grace_minutes: int = 15
 
@@ -85,13 +105,27 @@ class AppConfig:
 
     def is_user_targeted(self, username: Optional[str] = None) -> bool:
         user = (username or getpass.getuser()).lower().strip()
+        if user in SYSTEM_EXEMPT_USERS:
+            return False
         exempt = [u.lower().strip() for u in self.rules.exempt_users]
         if user in exempt:
             return False
+        try:
+            import pwd
+            pw = pwd.getpwnam(user)
+            if pw.pw_uid < 1000:
+                return False
+        except (KeyError, ImportError, Exception):
+            pass
         targets = [u.lower().strip() for u in self.rules.target_users]
         if not targets or "*" in targets or "all" in targets:
             return True
         return user in targets
+
+    def has_wildcard_target_users(self) -> bool:
+        """Return True if rules.target_users contains wildcard '*' or 'all' or is empty."""
+        targets = [u.lower().strip() for u in self.rules.target_users]
+        return not targets or "*" in targets or "all" in targets
 
 
 def get_default_config_path() -> Path:

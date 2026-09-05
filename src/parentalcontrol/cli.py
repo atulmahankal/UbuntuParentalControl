@@ -99,6 +99,12 @@ def cmd_service_install(args: argparse.Namespace, config: AppConfig) -> None:
     if args.exempt_users:
         config.rules.exempt_users = [u.strip() for u in args.exempt_users.split(",") if u.strip()]
 
+    if config.has_wildcard_target_users():
+        print("❌ Error: 'target_users: [*]' is not permitted when installing the system service.")
+        print("   Wildcards can match system display managers (such as GDM) and cause login lockout loops.")
+        print("   Please specify explicit child usernames via --target-users (e.g. --target-users 'himanshu,himanshi').")
+        sys.exit(1)
+
     # Save to /etc/parental-control/config.yaml
     sys_config_path = SYSTEM_CONFIG_DIR / "config.yaml"
     saved_path = save_config(config, sys_config_path)
