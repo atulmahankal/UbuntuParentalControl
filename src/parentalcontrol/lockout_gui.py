@@ -18,6 +18,143 @@ EXIT_ERROR = 1
 EXIT_LOGOUT = 2
 
 
+class GnomeKeybindingSuppressor:
+    """Temporarily suppresses GNOME window-switching and overview keybindings.
+
+    Backs up original values and restores them upon exit, signal, or exception.
+    """
+
+    BASE_KEYS = [
+        ("org.gnome.desktop.wm.keybindings", "switch-windows"),
+        ("org.gnome.desktop.wm.keybindings", "switch-windows-backward"),
+        ("org.gnome.desktop.wm.keybindings", "switch-applications"),
+        ("org.gnome.desktop.wm.keybindings", "switch-applications-backward"),
+        ("org.gnome.desktop.wm.keybindings", "switch-panels"),
+        ("org.gnome.desktop.wm.keybindings", "switch-panels-backward"),
+        ("org.gnome.desktop.wm.keybindings", "switch-group"),
+        ("org.gnome.desktop.wm.keybindings", "switch-group-backward"),
+        ("org.gnome.desktop.wm.keybindings", "cycle-windows"),
+        ("org.gnome.desktop.wm.keybindings", "cycle-windows-backward"),
+        ("org.gnome.desktop.wm.keybindings", "cycle-panels"),
+        ("org.gnome.desktop.wm.keybindings", "cycle-panels-backward"),
+        ("org.gnome.desktop.wm.keybindings", "cycle-group"),
+        ("org.gnome.desktop.wm.keybindings", "cycle-group-backward"),
+        ("org.gnome.desktop.wm.keybindings", "panel-run-dialog"),
+        ("org.gnome.desktop.wm.keybindings", "show-desktop"),
+        ("org.gnome.desktop.wm.keybindings", "activate-window-menu"),
+        ("org.gnome.desktop.wm.keybindings", "minimize"),
+        ("org.gnome.desktop.wm.keybindings", "toggle-maximized"),
+        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-left"),
+        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-right"),
+        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-up"),
+        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-down"),
+        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-1"),
+        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-last"),
+        ("org.gnome.mutter", "overlay-key"),
+        ("org.gnome.shell.keybindings", "toggle-overview"),
+        ("org.gnome.shell.keybindings", "toggle-application-view"),
+        ("org.gnome.shell.keybindings", "toggle-quick-settings"),
+        ("org.gnome.shell.keybindings", "toggle-message-tray"),
+        ("org.gnome.shell.keybindings", "focus-active-notification"),
+    ]
+
+    def __init__(self):
+        self._backup = {}
+        self._active = False
+        self._target_keys = list(self.BASE_KEYS)
+        for i in range(1, 10):
+            self._target_keys.append(("org.gnome.shell.keybindings", f"switch-to-application-{i}"))
+            self._target_keys.append(("org.gnome.shell.keybindings", f"open-new-window-application-{i}"))
+        for i in range(1, 11):
+            self._target_keys.append(("org.gnome.shell.extensions.dash-to-dock", f"app-hotkey-{i}"))
+            self._target_keys.append(("org.gnome.shell.extensions.dash-to-dock", f"app-ctrl-hotkey-{i}"))
+            self._target_keys.append(("org.gnome.shell.extensions.dash-to-dock", f"app-shift-hotkey-{i}"))
+
+    def __enter__(self):
+        self.suppress()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.restore()
+
+    def suppress(self):
+        if self._active:
+            return
+        import subprocess
+        for schema, key in self._target_keys:
+            try:
+                res = subprocess.run(["gsettings", "get", schema, key], capture_output=True, text=True, timeout=1)
+                if res.returncode == 0:
+                    val = res.stdout.strip()
+                    self._backup[(schema, key)] = val
+                    empty_val = "''" if key == "overlay-key" else "[]"
+                    subprocess.run(["gsettings", "set", schema, key, empty_val], capture_output=True, timeout=1)
+            except Exception:
+                pass
+        self._active = True
+        logger.info(f"Suppressed {len(self._backup)} GNOME keybindings for lockout overlay.")
+
+    def restore(self):
+        if not self._active:
+            return
+        import subprocess
+        for (schema, key), val in self._backup.items():
+            try:
+                subprocess.run(["gsettings", "set", schema, key, val], capture_output=True, timeout=1)
+            except Exception:
+                pass
+        self._backup.clear()
+        self._active = False
+        logger.info("Restored desktop window-switching keybindings.")
+
+
+def filter_lockout_key_event(event_keyval: int, event_state: int, testing_mode: bool = False) -> str:
+    """Evaluate key event security. Returns 'exit', 'block', or 'pass'."""
+    # Escape in test mode
+    if testing_mode and event_keyval == 0xFF1B:  # Gdk.KEY_Escape
+        return "exit"
+
+    # Tab with any modifier (Ctrl+Tab, Alt+Tab, Super+Tab, etc.) -> BLOCK
+    # Gdk.KEY_Tab = 0xFF09, KEY_ISO_Left_Tab = 0xFE20, KEY_KP_Tab = 0xFF89
+    if event_keyval in (0xFF09, 0xFE20, 0xFF89):
+        # 0x01 = SHIFT_MASK, 0x04 = CONTROL_MASK, 0x08 = MOD1_MASK (Alt), 0x04000000 = SUPER_MASK
+        if event_state & (0x04 | 0x08 | 0x04000000):
+            return "block"
+        return "pass"
+
+    # Block all Alt and Super combinations
+    if event_state & (0x08 | 0x04000000):
+        return "block"
+
+    # Block function keys F1-F12 (0xFFBE to 0xFFC9)
+    if 0xFFBE <= event_keyval <= 0xFFC9:
+        return "block"
+
+    # Filter Control combinations: allow only safe text editing
+    if event_state & 0x04:  # CONTROL_MASK
+        # Allowed: a, c, v, x, z, u, w, BackSpace (0xFF08), Delete (0xFFFF), Left/Right/Home/End
+        allowed_keys = {
+            ord('a'), ord('A'),
+            ord('c'), ord('C'),
+            ord('v'), ord('V'),
+            ord('x'), ord('X'),
+            ord('z'), ord('Z'),
+            ord('u'), ord('U'),
+            ord('w'), ord('W'),
+            0xFF08,  # BackSpace
+            0xFFFF,  # Delete
+            0xFF51,  # Left
+            0xFF53,  # Right
+            0xFF50,  # Home
+            0xFF57,  # End
+        }
+        if event_keyval in allowed_keys:
+            return "pass"
+        return "block"
+
+    return "pass"
+
+
 def run_lockout_screen(
     child_user: str,
     exempt_users: List[str],
@@ -26,7 +163,7 @@ def run_lockout_screen(
     session_id: Optional[str] = None,
     testing_mode: bool = False,
 ) -> int:
-    """Launch the GTK3 fullscreen lockout overlay."""
+    """Launch the GTK3 fullscreen lockout overlay with global device grab."""
     try:
         import gi
         gi.require_version("Gtk", "3.0")
@@ -40,82 +177,179 @@ def run_lockout_screen(
         logger.warning("Cannot initialize GTK display (headless session).")
         return _run_cli_fallback(child_user, exempt_users, reason, next_session_info)
 
-    # Clean exempt users list: exclude system accounts like gdm, lightdm, sddm, root
-    display_exempt = [
-        u for u in exempt_users
-        if u.lower().strip() not in ("gdm", "gdm3", "lightdm", "sddm", "daemon", "nobody", "*", "all")
+    # Clean exempt users list: exclude system accounts, prefer human parent accounts (e.g. atul)
+    exclude_users = {"gdm", "gdm3", "lightdm", "sddm", "daemon", "nobody", "root", "*", "all"}
+    human_exempt = [
+        u.strip() for u in exempt_users
+        if u.lower().strip() not in exclude_users and u.strip()
     ]
-    if not display_exempt:
-        display_exempt = ["atul", "root"]
+    if not human_exempt:
+        # Fallback to current sudo or login user
+        current_login = os.environ.get("SUDO_USER") or os.environ.get("USER") or "atul"
+        display_exempt = [current_login]
+    else:
+        display_exempt = human_exempt
+
+    # Suppress desktop window-switching keybindings during lockout
+    import atexit
+    suppressor = GnomeKeybindingSuppressor()
+    suppressor.suppress()
+    atexit.register(suppressor.restore)
 
     exit_code = [EXIT_LOGOUT]
+    backdrop_windows = []
+    pwd_ref = [None]
 
-    # Create Window
+    # Create Main Window
     window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
     window.set_title("Parental Control - Access Restricted")
     window.set_decorated(False)
     window.set_keep_above(True)
     window.set_modal(True)
+    window.stick()
+    window.set_urgency_hint(True)
     window.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
 
-    if not testing_mode:
-        window.fullscreen()
+    # Find primary monitor and fullscreen
+    disp = Gdk.Display.get_default()
+    primary_idx = 0
+    if disp:
+        for i in range(disp.get_n_monitors()):
+            if disp.get_monitor(i).is_primary():
+                primary_idx = i
+                break
+        window.fullscreen_on_monitor(window.get_screen(), primary_idx)
     else:
-        window.set_default_size(700, 620)
+        window.fullscreen()
 
-    # Block close / Alt+F4
+    # Block Alt+F4 / window closing
     window.connect("delete-event", lambda *args: True)
 
-    if testing_mode:
-        # Allow Esc in test mode only
-        def on_key(widget, event):
-            if event.keyval == Gdk.KEY_Escape:
-                exit_code[0] = EXIT_UNLOCKED
-                Gtk.main_quit()
-                return True
-            return False
-        window.connect("key-press-event", on_key)
+    # Clicking background refocuses password entry
+    window.connect(
+        "button-press-event",
+        lambda w, e: (pwd_ref[0].grab_focus() if pwd_ref[0] and pwd_ref[0].is_sensitive() else None, False)[1]
+    )
 
-    # Apply Modern CSS
+    # Device Grab (captures pointer and keyboard events)
+    def grab_devices(widget):
+        gdk_win = widget.get_window()
+        if gdk_win:
+            disp_dev = Gdk.Display.get_default()
+            if disp_dev:
+                seat = disp_dev.get_default_seat()
+                if seat:
+                    try:
+                        seat.grab(gdk_win, Gdk.SeatCapabilities.ALL, True, None, None, None)
+                    except Exception as e:
+                        logger.warning(f"Could not grab seat: {e}")
+
+    def ungrab_devices(widget=None):
+        disp_dev = Gdk.Display.get_default()
+        if disp_dev:
+            seat = disp_dev.get_default_seat()
+            if seat:
+                try:
+                    seat.ungrab()
+                except Exception:
+                    pass
+
+    window.connect("map-event", lambda w, e: (grab_devices(w), False)[1])
+    window.connect("unmap-event", lambda w, e: (ungrab_devices(w), False)[1])
+    window.connect("destroy", lambda w: ungrab_devices())
+
+    # Focus watchdog: re-assert focus if desktop manager tries to focus another window
+    def on_focus_out(widget, event):
+        def reassert():
+            window.fullscreen()
+            window.set_keep_above(True)
+            window.present()
+            if pwd_ref[0] and pwd_ref[0].is_sensitive():
+                pwd_ref[0].grab_focus()
+            return False
+        GLib.idle_add(reassert)
+        return False
+
+    window.connect("focus-out-event", on_focus_out)
+
+    def enforce_top():
+        if not window.is_active() or not window.has_toplevel_focus():
+            window.set_keep_above(True)
+            window.present()
+            if pwd_ref[0] and pwd_ref[0].is_sensitive() and not pwd_ref[0].is_focus():
+                pwd_ref[0].grab_focus()
+        return True
+
+    GLib.timeout_add(200, enforce_top)
+
+    # Keyboard handling
+    def on_key(widget, event):
+        action = filter_lockout_key_event(event.keyval, int(event.state), testing_mode)
+        if action == "exit":
+            exit_code[0] = EXIT_UNLOCKED
+            ungrab_devices()
+            Gtk.main_quit()
+            return True
+        elif action == "block":
+            return True
+        return False
+
+    window.connect("key-press-event", on_key)
+
+    # High-Contrast Modern CSS
     css_provider = Gtk.CssProvider()
     css = b"""
     window {
-        background-color: rgba(18, 22, 32, 0.97);
+        background-color: rgba(15, 23, 42, 0.98);
     }
     .main-card {
-        background-color: #242938;
-        border: 1px solid #3b4256;
+        background-color: #1e293b;
+        border: 2px solid #475569;
         border-radius: 16px;
         padding: 32px 40px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+    }
+    .test-banner {
+        background-color: #f59e0b;
+        color: #0f172a;
+        font-weight: bold;
+        font-size: 13px;
+        border-radius: 6px;
+        padding: 6px 14px;
     }
     .override-box {
-        background-color: #1a1d29;
-        border: 1px solid #2e3547;
+        background-color: #0f172a;
+        border: 1px solid #334155;
         border-radius: 12px;
         padding: 20px 24px;
     }
     .title-label {
-        color: #f1f5f9;
-        font-size: 24px;
+        color: #ffffff;
+        font-size: 26px;
         font-weight: bold;
     }
     .subtitle-label {
-        color: #94a3b8;
+        color: #cbd5e1;
         font-size: 14px;
     }
     .safety-label {
         color: #38bdf8;
         font-size: 13px;
-        font-weight: 500;
+        font-weight: 600;
     }
     .session-info {
         color: #fbbf24;
-        font-size: 14px;
-        font-weight: 600;
+        font-size: 15px;
+        font-weight: bold;
     }
     .section-title {
-        color: #e2e8f0;
-        font-size: 15px;
+        color: #f8fafc;
+        font-size: 16px;
+        font-weight: bold;
+    }
+    .field-label {
+        color: #f8fafc;
+        font-size: 14px;
         font-weight: bold;
     }
     .status-error {
@@ -128,10 +362,32 @@ def run_lockout_screen(
         font-size: 13px;
         font-weight: bold;
     }
+    entry {
+        background-color: #ffffff;
+        color: #0f172a;
+        border: 2px solid #94a3b8;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    entry:focus {
+        border-color: #38bdf8;
+    }
+    combobox button {
+        background-color: #ffffff;
+        color: #0f172a;
+        border: 2px solid #94a3b8;
+        border-radius: 8px;
+        padding: 6px 12px;
+        font-size: 14px;
+        font-weight: 500;
+    }
     .btn-unlock {
         background: #10b981;
         color: #ffffff;
         font-weight: bold;
+        font-size: 14px;
         padding: 10px 24px;
         border-radius: 8px;
         border: none;
@@ -150,6 +406,17 @@ def run_lockout_screen(
     .btn-logout:hover {
         background: #dc2626;
     }
+    .btn-test-exit {
+        background: #475569;
+        color: #ffffff;
+        font-weight: bold;
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: none;
+    }
+    .btn-test-exit:hover {
+        background: #334155;
+    }
     """
     css_provider.load_from_data(css)
     Gtk.StyleContext.add_provider_for_screen(
@@ -158,16 +425,22 @@ def run_lockout_screen(
         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
     )
 
-    # Root Box centering the card
+    # Root Box centering the card on the fullscreen dark backdrop
     root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
     root_box.set_valign(Gtk.Align.CENTER)
     root_box.set_halign(Gtk.Align.CENTER)
 
     card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     card.get_style_context().add_class("main-card")
-    card.set_size_request(580, -1)
+    card.set_size_request(600, -1)
 
-    # 1. Header with Icon and Title
+    # 0. Testing Mode Banner if active
+    if testing_mode:
+        banner = Gtk.Label(label="🧪 TEST MODE: All windows blocked. Press Esc to exit.")
+        banner.get_style_context().add_class("test-banner")
+        card.pack_start(banner, False, False, 0)
+
+    # 1. Header with Title
     header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     header_box.set_halign(Gtk.Align.CENTER)
 
@@ -196,7 +469,7 @@ def run_lockout_screen(
     card.pack_start(safety_label, False, False, 4)
 
     # 4. Parent Override Box
-    override_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    override_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
     override_card.get_style_context().add_class("override-box")
 
     override_title = Gtk.Label(label="🔑 Parent / Admin Temporary Extension")
@@ -206,11 +479,12 @@ def run_lockout_screen(
 
     # Grid for options
     grid = Gtk.Grid()
-    grid.set_column_spacing(16)
-    grid.set_row_spacing(10)
+    grid.set_column_spacing(20)
+    grid.set_row_spacing(12)
 
     # Row 0: Parent User
     lbl_parent = Gtk.Label(label="Parent Account:")
+    lbl_parent.get_style_context().add_class("field-label")
     lbl_parent.set_halign(Gtk.Align.START)
     parent_combo = Gtk.ComboBoxText()
     for u in display_exempt:
@@ -221,6 +495,7 @@ def run_lockout_screen(
 
     # Row 1: Extension Duration
     lbl_dur = Gtk.Label(label="Grant Extra Time:")
+    lbl_dur.get_style_context().add_class("field-label")
     lbl_dur.set_halign(Gtk.Align.START)
     dur_combo = Gtk.ComboBoxText()
     dur_options = [
@@ -239,11 +514,13 @@ def run_lockout_screen(
 
     # Row 2: Password Entry
     lbl_pwd = Gtk.Label(label="Parent Password:")
+    lbl_pwd.get_style_context().add_class("field-label")
     lbl_pwd.set_halign(Gtk.Align.START)
     pwd_entry = Gtk.Entry()
     pwd_entry.set_visibility(False)
     pwd_entry.set_placeholder_text("Enter parent password")
     pwd_entry.set_hexpand(True)
+    pwd_ref[0] = pwd_entry
     grid.attach(lbl_pwd, 0, 2, 1, 1)
     grid.attach(pwd_entry, 1, 2, 1, 1)
 
@@ -316,6 +593,7 @@ def run_lockout_screen(
                 pass
 
             exit_code[0] = EXIT_UNLOCKED
+            ungrab_devices()
             GLib.timeout_add(750, Gtk.main_quit)
         else:
             status_label.set_text(f"❌ {err_msg}")
@@ -334,8 +612,8 @@ def run_lockout_screen(
 
     card.pack_start(override_card, False, False, 0)
 
-    # 5. Bottom Logout Action
-    bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+    # 5. Bottom Actions (Logout & Test Mode Exit)
+    bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
     bottom_box.set_halign(Gtk.Align.CENTER)
 
     btn_logout = Gtk.Button(label="🚪 Log Out Now")
@@ -343,6 +621,7 @@ def run_lockout_screen(
 
     def do_logout(*args):
         exit_code[0] = EXIT_LOGOUT
+        ungrab_devices()
         try:
             from parentalcontrol.ipc import send_ipc_request
             send_ipc_request({
@@ -356,16 +635,58 @@ def run_lockout_screen(
 
     btn_logout.connect("clicked", do_logout)
     bottom_box.pack_start(btn_logout, False, False, 0)
+
+    if testing_mode:
+        btn_exit_test = Gtk.Button(label="❌ Exit Test (Esc)")
+        btn_exit_test.get_style_context().add_class("btn-test-exit")
+        def do_exit_test(*args):
+            exit_code[0] = EXIT_UNLOCKED
+            ungrab_devices()
+            Gtk.main_quit()
+        btn_exit_test.connect("clicked", do_exit_test)
+        bottom_box.pack_start(btn_exit_test, False, False, 0)
+
     card.pack_start(bottom_box, False, False, 0)
 
     root_box.pack_start(card, True, True, 0)
     window.add(root_box)
 
+    # Multi-monitor backdrop coverage (cover all non-primary monitors)
+    disp = Gdk.Display.get_default()
+    if disp and disp.get_n_monitors() > 1:
+        for i in range(disp.get_n_monitors()):
+            if i != primary_idx:
+                try:
+                    b_win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+                    b_win.set_decorated(False)
+                    b_win.set_keep_above(True)
+                    b_win.stick()
+                    b_win.fullscreen_on_monitor(window.get_screen(), i)
+                    b_win.connect("delete-event", lambda *args: True)
+                    b_win.connect("button-press-event", lambda *args: (window.present(), True)[1])
+                    backdrop_windows.append(b_win)
+                    b_win.show_all()
+                except Exception as e:
+                    logger.warning(f"Could not create backdrop on monitor {i}: {e}")
+
     window.show_all()
     pwd_entry.grab_focus()
 
-    Gtk.main()
-    window.destroy()
+    try:
+        Gtk.main()
+    finally:
+        suppressor.restore()
+        ungrab_devices()
+        for bw in backdrop_windows:
+            try:
+                bw.destroy()
+            except Exception:
+                pass
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
     return exit_code[0]
 
 
