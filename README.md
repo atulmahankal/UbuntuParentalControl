@@ -18,7 +18,7 @@ To allow the Parental Control application to read the schedule without requiring
 1. In the top-right corner of your Google Sheet, click the blue **Share** button.
 2. Under **General access**, change the dropdown from **Restricted** to **"Anyone with the link"**.
 3. Ensure the permission role on the right is set to **"Viewer"** (Read-Only).
-4. Click **Copy link** (e.g. `https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing`).
+4. Click **Copy link** (e.g. `https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit?usp=sharing`).
 5. Save this copied URL — you will supply it in **Step 1** during installation.
 
 > [!IMPORTANT]
