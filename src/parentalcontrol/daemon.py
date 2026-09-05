@@ -291,24 +291,35 @@ class ParentalControlMonitor:
         if self.config.warnings.play_sound:
             play_alert_sound("alarm-clock-elapsed")
 
+        # Determine if there is another scheduled session later today
+        next_session_info = ""
+        if eval_res.next_slot:
+            next_start = eval_res.next_slot.start_time.strftime("%I:%M %p").lstrip("0")
+            next_end = eval_res.next_slot.end_time.strftime("%I:%M %p").lstrip("0")
+            next_session_info = f"\nNext allowed session today: {next_start} - {next_end}"
+            notif_msg = f"Current session has ended. Next session today: {next_start} - {next_end}."
+        else:
+            next_session_info = "\nNo further sessions scheduled for today."
+            notif_msg = "Current screen time session has ended."
+
         if self.config.warnings.show_notifications:
             send_notification(
-                title="⏰ Screen Time Expired",
-                message="Your screen time has ended. The session will sign out now.",
+                title="⏰ Session Ended",
+                message=notif_msg,
                 urgency="critical",
                 icon="dialog-error",
             )
 
         grace_seconds = self.config.enforcement.termination_grace_seconds
         msg = (
-            f"⏰ SCREEN TIME HAS EXPIRED\n\n"
-            f"Your permitted computer time for today has ended.\n"
+            f"⏰ CURRENT SESSION HAS ENDED\n\n"
+            f"Your permitted time for this session is over.{next_session_info}\n"
             f"The session will automatically sign out in {grace_seconds} seconds.\n\n"
             f"Please save any unsaved work immediately!"
         )
 
         show_countdown_dialog(
-            title="Parental Control - Screen Time Expired",
+            title="Parental Control - Session Ended",
             message_prefix=msg,
             countdown_seconds=grace_seconds,
         )

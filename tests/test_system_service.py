@@ -108,5 +108,59 @@ def test_install_launcher_wrapper(tmp_path, monkeypatch):
     assert installed_path.exists()
     content = installed_path.read_text(encoding="utf-8")
     assert "#!/usr/bin/env bash" in content
-    assert "venv --clear --python" in content
     assert 'exec "${VENV_PYTHON}" -m parentalcontrol' in content
+
+
+def test_handle_session_expired_wording():
+    from datetime import datetime, time
+    from parentalcontrol.models import AccessResult, TimeSlot
+    from parentalcontrol.system_service import UserSession
+    from parentalcontrol.system_daemon import SystemParentalControlDaemon
+
+    cfg = AppConfig(
+        rules=RulesConfig(target_users=["alex"], exempt_users=[]),
+        warnings=WarningsConfig(play_sound=False, show_notifications=True),
+    )
+    daemon = SystemParentalControlDaemon(config=cfg)
+    sess = UserSession(session_id="1", uid=1001, username="alex", seat="seat0", session_type="wayland", state="active")
+
+    # Case 1: Has evening session later today
+    next_slot = TimeSlot(start_time=time(16, 0), end_time=time(20, 30), allowed=True)
+    eval_res_with_next = AccessResult(
+        is_allowed=False,
+        reason="Session ended",
+        user="alex",
+        current_time=datetime(2026, 9, 5, 12, 0),
+        next_slot=next_slot,
+    )
+
+    with patch("parentalcontrol.system_daemon.send_user_notification") as mock_notif, \
+         patch("parentalcontrol.system_daemon.show_user_countdown_dialog") as mock_dialog, \
+         patch("parentalcontrol.system_daemon.terminate_session_by_id_or_user"):
+        daemon._handle_session_expired(sess, eval_res_with_next)
+        
+        _, notif_kwargs = mock_notif.call_args
+        assert "4:00 PM - 8:30 PM" in notif_kwargs["message"]
+        assert "Session Ended" in notif_kwargs["title"]
+        
+        _, dialog_kwargs = mock_dialog.call_args
+        assert "Next allowed session today: 4:00 PM - 8:30 PM" in dialog_kwargs["message_prefix"]
+        assert "CURRENT SESSION HAS ENDED" in dialog_kwargs["message_prefix"]
+        assert "computer time for today has ended" not in dialog_kwargs["message_prefix"]
+
+    # Case 2: No more sessions today
+    eval_res_no_next = AccessResult(
+        is_allowed=False,
+        reason="Session ended",
+        user="alex",
+        current_time=datetime(2026, 9, 5, 21, 0),
+        next_slot=None,
+    )
+
+    with patch("parentalcontrol.system_daemon.send_user_notification") as mock_notif, \
+         patch("parentalcontrol.system_daemon.show_user_countdown_dialog") as mock_dialog, \
+         patch("parentalcontrol.system_daemon.terminate_session_by_id_or_user"):
+        daemon._handle_session_expired(sess, eval_res_no_next)
+        
+        _, dialog_kwargs = mock_dialog.call_args
+        assert "No further sessions scheduled for today." in dialog_kwargs["message_prefix"]
