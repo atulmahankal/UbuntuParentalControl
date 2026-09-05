@@ -232,9 +232,11 @@ enforcement:
   1. **Resilient Shell Wrapper**: `/usr/local/bin/parentalcontrol` is deployed as an auto-healing launcher script rather than a direct symlink. On every invocation, it verifies if the virtualenv interpreter can execute Python code. If broken or missing, it automatically invokes `uv venv --clear --python /usr/bin/python3 && uv sync --quiet` to rebuild the venv instantly with the host's new Python version.
   2. **APT Post-Invoke Hook**: An automatic hook is registered at `/etc/apt/apt.conf.d/99parentalcontrol` which triggers venv self-healing automatically after any `apt-get upgrade` or release upgrade transaction.
   3. **System Service Resilience**: The systemd service unit executes via the self-healing launcher, ensuring background service recovery across OS upgrades without manual intervention.
-### Safe Lockout Screen & Parent Extension (v1.0.4)
+### Safe Lockout Screen & Parent Extension (v1.0.5)
 - **Work Preservation**: When a child's session reaches timeout (or login outside schedule), the application does **not** abruptly kill processes or break ongoing work (such as long-running terminal commands, 30-minute builds, renders, or downloads).
 - **Always-on-Top Lockout Overlay**: Displays a fullscreen, modal GTK3 overlay that blocks keyboard/mouse access to other applications while background tasks continue executing safely.
+- **Desktop Keybinding Suppression**: Automatically backs up and suppresses GNOME window-switching (`Alt+Tab`, `Super+Tab`, `Ctrl+Alt+Tab`), workspace navigation, and overview hotkeys during lockout, restoring them cleanly upon exit.
+- **Hardened Input Filtering**: Intercepts `Ctrl+Tab`, function keys (`F1`–`F12`), and external shortcuts while preserving standard clipboard text navigation inside the parent password field.
 - **Two Exclusive Actions**:
   1. **Log Out Now**: Voluntarily ends the session cleanly.
   2. **Parent Extension / Temporary Allow**: The parent selects their account (from `rules.exempt_users`, e.g. `atul`), selects an extension duration (15m, 30m, 45m, 1h, 2h, or Rest of Today), and enters their password.
