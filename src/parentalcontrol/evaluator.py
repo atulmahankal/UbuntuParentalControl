@@ -116,6 +116,28 @@ def evaluate_access(
     else:
         target_device = str(device).lower().strip()
 
+    # Check for active temporary parent override first
+    from parentalcontrol.override_manager import get_active_override
+    active_override = get_active_override(target_user)
+    if active_override:
+        expires_at_ts = active_override.get("expires_at", 0)
+        remaining_sec = expires_at_ts - now.timestamp()
+        if remaining_sec > 0:
+            remaining_mins = round(remaining_sec / 60.0, 1)
+            expiry_dt = datetime.fromtimestamp(expires_at_ts)
+            granted_by = active_override.get("granted_by", "Parent")
+            time_str = expiry_dt.strftime("%I:%M %p").lstrip("0")
+            return AccessResult(
+                is_allowed=True,
+                reason=f"Temporary access granted by {granted_by} until {time_str}.",
+                user=user,
+                current_time=now,
+                remaining_minutes=remaining_mins,
+                device=target_device,
+                is_cached_schedule=is_cached,
+                cache_age_seconds=cache_age_seconds,
+            )
+
     # 1. Filter to rules that apply to this device
     matching_device_rules = [r for r in rules if matches_device(r.device, target_device)]
 

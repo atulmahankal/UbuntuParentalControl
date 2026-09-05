@@ -135,18 +135,16 @@ def test_handle_session_expired_wording():
     )
 
     with patch("parentalcontrol.system_daemon.send_user_notification") as mock_notif, \
-         patch("parentalcontrol.system_daemon.show_user_countdown_dialog") as mock_dialog, \
-         patch("parentalcontrol.system_daemon.terminate_session_by_id_or_user"):
+         patch.object(daemon, "_enforce_lockout_overlay") as mock_lockout:
         daemon._handle_session_expired(sess, eval_res_with_next)
         
         _, notif_kwargs = mock_notif.call_args
         assert "4:00 PM - 8:30 PM" in notif_kwargs["message"]
         assert "Session Ended" in notif_kwargs["title"]
         
-        _, dialog_kwargs = mock_dialog.call_args
-        assert "Next allowed session today: 4:00 PM - 8:30 PM" in dialog_kwargs["message_prefix"]
-        assert "CURRENT SESSION HAS ENDED" in dialog_kwargs["message_prefix"]
-        assert "computer time for today has ended" not in dialog_kwargs["message_prefix"]
+        mock_lockout.assert_called_once()
+        _, lockout_kwargs = mock_lockout.call_args
+        assert "Next allowed session today: 4:00 PM - 8:30 PM" in lockout_kwargs["next_session_info"]
 
     # Case 2: No more sessions today
     eval_res_no_next = AccessResult(
@@ -158,9 +156,9 @@ def test_handle_session_expired_wording():
     )
 
     with patch("parentalcontrol.system_daemon.send_user_notification") as mock_notif, \
-         patch("parentalcontrol.system_daemon.show_user_countdown_dialog") as mock_dialog, \
-         patch("parentalcontrol.system_daemon.terminate_session_by_id_or_user"):
+         patch.object(daemon, "_enforce_lockout_overlay") as mock_lockout:
         daemon._handle_session_expired(sess, eval_res_no_next)
         
-        _, dialog_kwargs = mock_dialog.call_args
-        assert "No further sessions scheduled for today." in dialog_kwargs["message_prefix"]
+        mock_lockout.assert_called_once()
+        _, lockout_kwargs = mock_lockout.call_args
+        assert lockout_kwargs["next_session_info"] == ""

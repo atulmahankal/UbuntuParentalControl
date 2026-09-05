@@ -475,6 +475,84 @@ def cmd_setup(args: argparse.Namespace, config: AppConfig) -> None:
         print(f"   sudo parentalcontrol service-install --url '{config.google_sheet.url}'\n")
 
 
+def cmd_lockout_screen(args: argparse.Namespace, config: AppConfig) -> None:
+    """Run the always-on-top lockout screen."""
+    from parentalcontrol.lockout_gui import run_lockout_screen
+    exempt = [u.strip() for u in args.exempt_users.split(",") if u.strip()] if args.exempt_users else config.rules.exempt_users
+    code = run_lockout_screen(
+        child_user=args.user or os.environ.get("USER", "child"),
+        exempt_users=exempt,
+        reason=args.reason or "Your permitted screen time for this session is over.",
+        next_session_info=args.next_session,
+        session_id=args.session_id,
+        testing_mode=args.testing,
+    )
+    sys.exit(code)
+
+
+def cmd_test_lockout(args: argparse.Namespace, config: AppConfig) -> None:
+    """Test the lockout overlay screen interactively (Press Esc to exit in test mode)."""
+    from parentalcontrol.lockout_gui import run_lockout_screen
+    user = args.user or os.environ.get("USER", "himanshu")
+    exempt = config.rules.exempt_users or ["atul"]
+    print("\n🚀 Launching test lockout overlay...")
+    print("   • Testing mode: Press Esc or test parent password unlock to dismiss.")
+    print("   • Running commands and background tasks continue unaffected.")
+    code = run_lockout_screen(
+        child_user=user,
+        exempt_users=exempt,
+        reason="Your permitted screen time for this session is over.",
+        next_session_info="Next allowed session today: 4:00 PM - 8:30 PM",
+        testing_mode=True,
+    )
+    res_str = "UNLOCKED / EXTENDED" if code == 0 else "LOGGED OUT" if code == 2 else f"CLOSED (code {code})"
+    print(f"\n✅ Lockout overlay exited: {res_str}\n")
+
+
+def cmd_override(args: argparse.Namespace, config: AppConfig) -> None:
+    """Manage temporary parent overrides."""
+    import time
+    from parentalcontrol.override_manager import (
+        grant_temporary_override,
+        load_all_overrides,
+        revoke_override,
+    )
+
+    if args.list:
+        all_ov = load_all_overrides()
+        if not all_ov:
+            print("\nNo active temporary overrides.\n")
+            return
+        print("\nActive Temporary Overrides:")
+        for u, inf in all_ov.items():
+            rem = int(max(0, inf.get("expires_at", 0) - time.time()) / 60)
+            print(f"  • {u}: Granted by '{inf.get('granted_by')}' for {inf.get('duration_minutes')}m ({rem} min remaining, expires at {inf.get('expires_at_iso')})")
+        print()
+        return
+
+    if args.revoke:
+        if not args.user:
+            print("❌ Error: --user is required when using --revoke.")
+            sys.exit(1)
+        if revoke_override(args.user):
+            print(f"✅ Temporary override for '{args.user}' revoked.")
+        else:
+            print(f"ℹ️ No active override found for '{args.user}'.")
+        return
+
+    if not args.user or not args.minutes:
+        print("❌ Error: --user and --minutes are required to grant an override.")
+        print("   Usage: parentalcontrol override --user <child> --minutes <mins> [--parent <parent>]")
+        print("          parentalcontrol override --list")
+        print("          parentalcontrol override --revoke --user <child>")
+        sys.exit(1)
+
+    parent = args.parent or os.environ.get("SUDO_USER") or os.environ.get("USER", "atul")
+    rec = grant_temporary_override(args.user, parent, int(args.minutes))
+    print(f"\n✅ Temporary override granted for '{args.user}' by '{parent}' for {args.minutes} minutes.")
+    print(f"   Expires at: {rec.get('expires_at_iso')}\n")
+
+
 def main() -> None:
     """Main CLI entrypoint."""
     # Common argument parser for --config flag (can be used before or after any subcommand)
@@ -551,6 +629,27 @@ def main() -> None:
     p_template = subparsers.add_parser("create-template", parents=[config_parent_parser], help="Generate sample CSV template")
     p_template.add_argument("-o", "--out", help="Output file path")
 
+    # Command: lockout-screen (invoked by system daemon or test)
+    p_lockout = subparsers.add_parser("lockout-screen", parents=[config_parent_parser], help="Display always-on-top lockout overlay")
+    p_lockout.add_argument("--user", help="Target child username")
+    p_lockout.add_argument("--exempt-users", help="Comma-separated exempt usernames")
+    p_lockout.add_argument("--reason", help="Lockout reason text")
+    p_lockout.add_argument("--next-session", help="Next allowed session text")
+    p_lockout.add_argument("--session-id", help="Active loginctl session ID")
+    p_lockout.add_argument("--testing", action="store_true", help="Windowed testing mode (Esc to close)")
+
+    # Command: test-lockout (user-facing quick test)
+    p_tlock = subparsers.add_parser("test-lockout", parents=[config_parent_parser], help="Test the lockout screen overlay on desktop")
+    p_tlock.add_argument("--user", help="Test as username (default: current or himanshu)")
+
+    # Command: override
+    p_ovr = subparsers.add_parser("override", parents=[config_parent_parser], help="Manage temporary parent overrides")
+    p_ovr.add_argument("--user", help="Child username to extend")
+    p_ovr.add_argument("--minutes", type=int, help="Minutes to extend")
+    p_ovr.add_argument("--parent", help="Parent/admin username granting override")
+    p_ovr.add_argument("--list", action="store_true", help="List all active overrides")
+    p_ovr.add_argument("--revoke", action="store_true", help="Revoke active override for user")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -578,6 +677,12 @@ def main() -> None:
         cmd_setup(args, config)
     elif args.command == "create-template":
         cmd_create_template(args)
+    elif args.command == "lockout-screen":
+        cmd_lockout_screen(args, config)
+    elif args.command == "test-lockout":
+        cmd_test_lockout(args, config)
+    elif args.command == "override":
+        cmd_override(args, config)
     else:
         cmd_service_status(args, config)
 

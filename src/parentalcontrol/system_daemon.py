@@ -16,6 +16,7 @@ from parentalcontrol.system_service import (
     UserSession,
     list_active_sessions,
     play_user_sound,
+    run_in_user_session,
     send_user_notification,
     show_user_countdown_dialog,
     show_user_warning_dialog,
@@ -51,6 +52,7 @@ class SystemParentalControlDaemon:
         self.cached_rules: List[ScheduleRule] = []
         self.last_sync_time: float = 0.0
         self._running: bool = True
+        self.ipc_server = None
 
     def start(self) -> None:
         """Start the system-wide service daemon loop."""
@@ -74,6 +76,18 @@ class SystemParentalControlDaemon:
             logger.critical(err_msg)
             print(f"\n❌ {err_msg}\n", file=sys.stderr)
             sys.exit(1)
+
+        # Start IPC Server for parent override authentication
+        try:
+            from parentalcontrol.ipc import ParentalControlIPCServer
+            self.ipc_server = ParentalControlIPCServer(
+                exempt_users=self.config.rules.exempt_users,
+                on_override=self._on_override_granted,
+                on_logout=self._on_logout_requested,
+            )
+            self.ipc_server.start()
+        except Exception as e:
+            logger.warning(f"Could not start IPC server: {e}")
 
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -257,20 +271,23 @@ class SystemParentalControlDaemon:
                 timeout_seconds=20,
             )
 
+    def _on_override_granted(self, child_user: str, parent_user: str, duration: int) -> None:
+        logger.info(f"IPC Server: Parent override approved for '{child_user}' by '{parent_user}' for {duration}m")
+
+    def _on_logout_requested(self, session_id: Optional[str], child_user: str) -> None:
+        logger.info(f"IPC Server: Voluntary logout requested for '{child_user}' (session {session_id})")
+        sid = session_id or ""
+        if not sid:
+            for s in list_active_sessions():
+                if s.username.lower() == child_user.lower():
+                    sid = s.session_id
+                    break
+        terminate_session_by_id_or_user(sid, child_user)
+
     def _handle_login_denial(self, session: UserSession, result: AccessResult) -> None:
-        """Display lockout countdown on child's screen and terminate session."""
+        """Display lockout overlay on child's screen and allow parent override or logout."""
         now_str = result.current_time.strftime("%I:%M %p").lstrip("0")
         allowed_str = ", ".join(s.formatted_range() for s in result.allowed_slots_today) if result.allowed_slots_today else "No hours scheduled today"
-        custom_msg = f"\nNote: {result.custom_message}" if result.custom_message else ""
-
-        msg = (
-            f"⛔ SCREEN TIME RESTRICTED\n\n"
-            f"Login is not permitted for '{session.username}' right now.\n"
-            f"Current Time: {now_str}\n"
-            f"Reason: {result.reason}\n"
-            f"Allowed Hours Today: {allowed_str}"
-            f"{custom_msg}"
-        )
 
         if self.config.warnings.play_sound:
             play_user_sound(session.uid, session.username, "dialog-warning")
@@ -285,19 +302,20 @@ class SystemParentalControlDaemon:
                 icon="dialog-error",
             )
 
-        grace_sec = self.config.enforcement.login_denial_grace_seconds
-        show_user_countdown_dialog(
-            uid=session.uid,
-            username=session.username,
-            title="Access Restricted - Parental Control",
-            message_prefix=msg,
-            countdown_seconds=grace_sec,
+        next_str = ""
+        if result.next_slot:
+            next_start = result.next_slot.start_time.strftime("%I:%M %p").lstrip("0")
+            next_end = result.next_slot.end_time.strftime("%I:%M %p").lstrip("0")
+            next_str = f"Next allowed session today: {next_start} - {next_end}"
+
+        self._enforce_lockout_overlay(
+            session=session,
+            reason=f"Login is not permitted right now ({now_str}). {result.reason}",
+            next_session_info=next_str,
         )
 
-        terminate_session_by_id_or_user(session.session_id, session.username)
-
     def _handle_session_expired(self, session: UserSession, eval_res: AccessResult) -> None:
-        """Display final countdown on child's screen and terminate session."""
+        """Handle session expiration by presenting lockout overlay with override option."""
         if self.config.warnings.play_sound:
             play_user_sound(session.uid, session.username, "alarm-clock-elapsed")
 
@@ -306,10 +324,9 @@ class SystemParentalControlDaemon:
         if eval_res.next_slot:
             next_start = eval_res.next_slot.start_time.strftime("%I:%M %p").lstrip("0")
             next_end = eval_res.next_slot.end_time.strftime("%I:%M %p").lstrip("0")
-            next_session_info = f"\nNext allowed session today: {next_start} - {next_end}"
+            next_session_info = f"Next allowed session today: {next_start} - {next_end}"
             notif_msg = f"Current session has ended. Next session today: {next_start} - {next_end}."
         else:
-            next_session_info = "\nNo further sessions scheduled for today."
             notif_msg = "Current screen time session has ended."
 
         if self.config.warnings.show_notifications:
@@ -322,25 +339,84 @@ class SystemParentalControlDaemon:
                 icon="dialog-error",
             )
 
-        grace_seconds = self.config.enforcement.termination_grace_seconds
-        msg = (
-            f"⏰ CURRENT SESSION HAS ENDED\n\n"
-            f"Your permitted time for this session is over.{next_session_info}\n"
-            f"The session will automatically sign out in {grace_seconds} seconds.\n\n"
-            f"Please save any unsaved work immediately!"
+        self._enforce_lockout_overlay(
+            session=session,
+            reason="Your permitted screen time for this session is over.",
+            next_session_info=next_session_info,
         )
 
-        show_user_countdown_dialog(
-            uid=session.uid,
-            username=session.username,
-            title="Parental Control - Session Ended",
-            message_prefix=msg,
-            countdown_seconds=grace_seconds,
-        )
+    def _enforce_lockout_overlay(
+        self,
+        session: UserSession,
+        reason: str,
+        next_session_info: str = "",
+    ) -> None:
+        """Display the always-on-top lockout overlay with anti-tamper supervision."""
+        from parentalcontrol.override_manager import get_active_override
 
+        exempt_list = ",".join(
+            u for u in self.config.rules.exempt_users
+            if u.lower().strip() not in ("gdm", "gdm3", "lightdm", "sddm", "daemon", "nobody", "*", "all")
+        ) or "atul"
+
+        cmd = [
+            "parentalcontrol",
+            "lockout-screen",
+            "--user",
+            session.username,
+            "--exempt-users",
+            exempt_list,
+            "--reason",
+            reason,
+        ]
+        if next_session_info:
+            cmd.extend(["--next-session", next_session_info])
+        if session.session_id:
+            cmd.extend(["--session-id", session.session_id])
+
+        logger.info(f"Launching lockout overlay for user '{session.username}' (Session {session.session_id})...")
+        proc = run_in_user_session(session.uid, session.username, cmd, async_proc=True)
+
+        if not proc:
+            logger.warning(f"Could not launch GUI overlay for {session.username}. Falling back to standard termination.")
+            show_user_countdown_dialog(
+                uid=session.uid,
+                username=session.username,
+                title="Parental Control - Access Restricted",
+                message_prefix=f"⏰ SCREEN TIME RESTRICTED\n\n{reason}",
+                countdown_seconds=self.config.enforcement.login_denial_grace_seconds,
+            )
+            terminate_session_by_id_or_user(session.session_id, session.username)
+            return
+
+        # Supervise the lockout process
+        ret_code = proc.wait()
+        logger.info(f"Lockout overlay for user '{session.username}' exited with code {ret_code}.")
+
+        # Check if parent override was granted during lockout
+        active_override = get_active_override(session.username)
+        if active_override and active_override.get("expires_at", 0) > time.time():
+            logger.info(f"Parent override verified for '{session.username}'! Ongoing work preserved safely.")
+            if session.session_id not in self.active_monitored:
+                self.active_monitored[session.session_id] = MonitoredSession(
+                    session_id=session.session_id,
+                    username=session.username,
+                    uid=session.uid,
+                    login_time=datetime.now(),
+                    initial_check_passed=True,
+                )
+            return
+
+        # If no override granted (clicked Logout or tampered/killed), terminate session
+        logger.warning(f"No valid parent override for '{session.username}' (code {ret_code}). Terminating session.")
         terminate_session_by_id_or_user(session.session_id, session.username)
 
     def _handle_signal(self, signum, frame) -> None:
         logger.info(f"Received signal {signum}. Stopping System Parental Control Daemon...")
         self._running = False
+        if self.ipc_server:
+            try:
+                self.ipc_server.stop()
+            except Exception:
+                pass
         sys.exit(0)

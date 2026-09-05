@@ -194,3 +194,25 @@ def test_evaluate_access_device_fallback_and_wildcard():
     # Gaming rig at 17:00 -> Gaming rig has specific device rule (18:00 - 20:00) which takes precedence over wildcard
     res_gaming = evaluate_access("himanshu", rules, check_dt=check_dt, device="gaming-rig")
     assert res_gaming.is_allowed is False
+
+
+def test_evaluate_access_with_active_override(monkeypatch):
+    from parentalcontrol.evaluator import evaluate_access
+
+    fake_override = {
+        "child_user": "himanshu",
+        "granted_by": "atul",
+        "expires_at": datetime(2026, 9, 1, 17, 30).timestamp(),
+        "duration_minutes": 30,
+    }
+    monkeypatch.setattr(
+        "parentalcontrol.override_manager.get_active_override",
+        lambda u: fake_override if u == "himanshu" else None,
+    )
+
+    # Even with empty rules, active override allows access
+    check_dt = datetime(2026, 9, 1, 17, 10)
+    res = evaluate_access("himanshu", rules=[], check_dt=check_dt)
+    assert res.is_allowed is True
+    assert "Temporary access granted by atul" in res.reason
+    assert res.remaining_minutes == 20.0
