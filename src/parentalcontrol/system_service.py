@@ -366,20 +366,69 @@ def remove_apt_upgrade_hook() -> None:
             pass
 
 
+WRAPPER_SCRIPT_PATH = Path("/usr/local/bin/parentalcontrol")
+
+
+def install_launcher_wrapper(install_dir: Path = Path("/opt/parental-control")) -> Path:
+    """Install a resilient self-healing bash launcher wrapper at /usr/local/bin/parentalcontrol."""
+    script_content = f"""#!/usr/bin/env bash
+# Ubuntu Parental Control - Resilient Self-Healing Launcher
+# Survives system Python upgrades across Ubuntu releases (e.g. 24.04 -> 24.10 / 26.04)
+INSTALL_DIR="{install_dir}"
+VENV_DIR="${{INSTALL_DIR}}/.venv"
+VENV_PYTHON="${{VENV_DIR}}/bin/python3"
+
+# Self-heal virtualenv if python interpreter is broken or missing
+if [ ! -x "${{VENV_PYTHON}}" ] || ! "${{VENV_PYTHON}}" -c "import sys" >/dev/null 2>&1; then
+    UV_BIN="$(which uv 2>/dev/null || echo /usr/local/bin/uv)"
+    if [ ! -x "${{UV_BIN}}" ]; then
+        for u_home in /home/* /root; do
+            if [ -x "${{u_home}}/.local/bin/uv" ]; then
+                UV_BIN="${{u_home}}/.local/bin/uv"
+                break
+            fi
+        done
+    fi
+    SYS_PYTHON="$(which python3 2>/dev/null || echo /usr/bin/python3)"
+    if [ -x "${{UV_BIN}}" ] && [ -d "${{INSTALL_DIR}}" ] && [ -x "${{SYS_PYTHON}}" ]; then
+        (
+            cd "${{INSTALL_DIR}}" && \\
+            "${{UV_BIN}}" venv --clear --python "${{SYS_PYTHON}}" && \\
+            "${{UV_BIN}}" sync --quiet
+        ) >/dev/null 2>&1
+    fi
+fi
+
+if [ -x "${{VENV_PYTHON}}" ] && "${{VENV_PYTHON}}" -c "import sys" >/dev/null 2>&1; then
+    exec "${{VENV_PYTHON}}" -m parentalcontrol "$@"
+elif [ -x "${{UV_BIN}}" ] && [ -d "${{INSTALL_DIR}}" ]; then
+    exec "${{UV_BIN}}" run --directory "${{INSTALL_DIR}}" parentalcontrol "$@"
+else
+    echo "❌ Error: Parental Control virtual environment could not be loaded." >&2
+    echo "   Please run: cd {install_dir} && uv venv --clear && uv sync" >&2
+    exit 1
+fi
+"""
+    try:
+        WRAPPER_SCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(WRAPPER_SCRIPT_PATH, "w", encoding="utf-8") as f:
+            f.write(script_content)
+        os.chmod(WRAPPER_SCRIPT_PATH, 0o755)
+        logger.info(f"Installed self-healing launcher wrapper at {WRAPPER_SCRIPT_PATH}")
+    except Exception as e:
+        logger.warning(f"Could not write launcher wrapper at {WRAPPER_SCRIPT_PATH}: {e}")
+    return WRAPPER_SCRIPT_PATH
+
+
 def install_system_service(exec_path: Optional[str] = None) -> Path:
     """Install and enable systemd service and APT auto-upgrade hook."""
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         raise PermissionError("Installing as a system service requires root privileges. Please run with sudo.")
 
-    # Determine executable path
-    cmd = exec_path
-    if not cmd:
-        venv_bin = Path(__file__).resolve().parent.parent.parent / ".venv" / "bin" / "parentalcontrol"
-        if venv_bin.exists():
-            cmd = str(venv_bin)
-        else:
-            which_bin = shutil.which("parentalcontrol")
-            cmd = which_bin or "/usr/local/bin/parentalcontrol"
+    # Install resilient launcher wrapper so systemd survives Python upgrades
+    install_launcher_wrapper()
+
+    cmd = exec_path or str(WRAPPER_SCRIPT_PATH)
 
     content = generate_systemd_service_content(cmd)
     with open(SYSTEMD_SERVICE_PATH, "w", encoding="utf-8") as f:

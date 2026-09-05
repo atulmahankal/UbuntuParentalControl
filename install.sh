@@ -107,12 +107,49 @@ log_info "Setting up Python virtual environment and dependencies..."
 "${UV_BIN}" sync --frozen --quiet || "${UV_BIN}" sync --quiet
 log_success "Virtual environment initialized at ${INSTALL_DIR}/.venv"
 
-# 6. Create global binary symlink in /usr/local/bin
-VENV_BIN="${INSTALL_DIR}/.venv/bin/parentalcontrol"
+# 6. Create resilient self-healing launcher wrapper in /usr/local/bin
 mkdir -p /usr/local/bin
-ln -sf "${VENV_BIN}" /usr/local/bin/parentalcontrol
-chmod +x /usr/local/bin/parentalcontrol
-log_success "CLI command linked to /usr/local/bin/parentalcontrol"
+cat << 'WRAPPER_EOF' > /usr/local/bin/parentalcontrol
+#!/usr/bin/env bash
+# Ubuntu Parental Control - Resilient Self-Healing Launcher
+# Survives system Python upgrades across Ubuntu releases (e.g. 24.04 -> 24.10 / 26.04)
+INSTALL_DIR="/opt/parental-control"
+VENV_DIR="${INSTALL_DIR}/.venv"
+VENV_PYTHON="${VENV_DIR}/bin/python3"
+
+# Self-heal virtualenv if python interpreter is broken or missing
+if [ ! -x "${VENV_PYTHON}" ] || ! "${VENV_PYTHON}" -c "import sys" >/dev/null 2>&1; then
+    UV_BIN="$(which uv 2>/dev/null || echo /usr/local/bin/uv)"
+    if [ ! -x "${UV_BIN}" ]; then
+        for u_home in /home/* /root; do
+            if [ -x "${u_home}/.local/bin/uv" ]; then
+                UV_BIN="${u_home}/.local/bin/uv"
+                break
+            fi
+        done
+    fi
+    SYS_PYTHON="$(which python3 2>/dev/null || echo /usr/bin/python3)"
+    if [ -x "${UV_BIN}" ] && [ -d "${INSTALL_DIR}" ] && [ -x "${SYS_PYTHON}" ]; then
+        (
+            cd "${INSTALL_DIR}" && \
+            "${UV_BIN}" venv --clear --python "${SYS_PYTHON}" && \
+            "${UV_BIN}" sync --quiet
+        ) >/dev/null 2>&1
+    fi
+fi
+
+if [ -x "${VENV_PYTHON}" ] && "${VENV_PYTHON}" -c "import sys" >/dev/null 2>&1; then
+    exec "${VENV_PYTHON}" -m parentalcontrol "$@"
+elif [ -x "${UV_BIN}" ] && [ -d "${INSTALL_DIR}" ]; then
+    exec "${UV_BIN}" run --directory "${INSTALL_DIR}" parentalcontrol "$@"
+else
+    echo "❌ Error: Parental Control virtual environment could not be loaded." >&2
+    echo "   Please run: cd ${INSTALL_DIR} && uv venv --clear && uv sync" >&2
+    exit 1
+fi
+WRAPPER_EOF
+chmod 755 /usr/local/bin/parentalcontrol
+log_success "Resilient CLI launcher installed at /usr/local/bin/parentalcontrol"
 
 # 7. Setup Configuration in /etc/parental-control/config.yaml
 mkdir -p "${CONFIG_DIR}"

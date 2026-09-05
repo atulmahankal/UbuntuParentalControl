@@ -97,3 +97,16 @@ def test_system_daemon_stops_on_wildcard_target_users():
         daemon.start()
 
     assert exc_info.value.code == 1
+
+
+def test_install_launcher_wrapper(tmp_path, monkeypatch):
+    from parentalcontrol.system_service import install_launcher_wrapper
+
+    target_wrapper = tmp_path / "parentalcontrol"
+    monkeypatch.setattr("parentalcontrol.system_service.WRAPPER_SCRIPT_PATH", target_wrapper)
+    installed_path = install_launcher_wrapper(install_dir=tmp_path / "opt")
+    assert installed_path.exists()
+    content = installed_path.read_text(encoding="utf-8")
+    assert "#!/usr/bin/env bash" in content
+    assert "venv --clear --python" in content
+    assert 'exec "${VENV_PYTHON}" -m parentalcontrol' in content

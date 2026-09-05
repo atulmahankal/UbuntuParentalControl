@@ -1,6 +1,6 @@
 [project]
 name = "parentalcontrol"
-version = "1.0.2"
+version = "1.0.3"
 description = "Parental Control Google Sheets Schedule Enforcer & System Daemon for Ubuntu"
 readme = "README.md"
 authors = [

@@ -226,6 +226,12 @@ enforcement:
 - **Built-in System Account Protection**: All system accounts (`UID < 1000`) and display manager users (`gdm`, `gdm3`, `lightdm`, `sddm`, `daemon`, `nobody`) are permanently exempt. The service will refuse to track, alert, or terminate any system user.
 - **Resolution**: Specify explicit child usernames in `rules.target_users` (e.g. `['himanshu', 'himanshi']`) and ensure parent admins and display managers (`gdm`, `lightdm`, `sddm`) are in `rules.exempt_users`.
 
+### Ubuntu Release Upgrades & Self-Healing Launcher (v1.0.3)
+- **What happened**: When upgrading Ubuntu between major releases (for example Ubuntu 24.04 LTS to Ubuntu 26.04 LTS or intermediate releases), the default system Python version changes (e.g., Python 3.12 is replaced by Python 3.14). Because standard virtual environments pin the interpreter symlink to the previous Python binary, running the CLI or system service resulted in `bash: /usr/local/bin/parentalcontrol: /opt/parental-control/.venv/bin/python3: bad interpreter: No such file or directory`.
+- **Self-Healing Architecture (v1.0.3)**:
+  1. **Resilient Shell Wrapper**: `/usr/local/bin/parentalcontrol` is deployed as an auto-healing launcher script rather than a direct symlink. On every invocation, it verifies if the virtualenv interpreter can execute Python code. If broken or missing, it automatically invokes `uv venv --clear --python /usr/bin/python3 && uv sync --quiet` to rebuild the venv instantly with the host's new Python version.
+  2. **APT Post-Invoke Hook**: An automatic hook is registered at `/etc/apt/apt.conf.d/99parentalcontrol` which triggers venv self-healing automatically after any `apt-get upgrade` or release upgrade transaction.
+  3. **System Service Resilience**: The systemd service unit executes via the self-healing launcher, ensuring background service recovery across OS upgrades without manual intervention.
 
 ---
 
@@ -251,7 +257,7 @@ sudo uv run parentalcontrol service-install --url "https://docs.google.com/sprea
 
 ## 🧪 Automated Testing
 
-Run the 22 automated unit and integration tests:
+Run the 33 automated unit and integration tests:
 ```bash
 uv run pytest -v
 ```
