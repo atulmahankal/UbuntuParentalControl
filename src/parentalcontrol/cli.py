@@ -27,6 +27,7 @@ from parentalcontrol.system_daemon import SystemParentalControlDaemon
 from parentalcontrol.system_service import (
     install_system_service,
     uninstall_system_service,
+    install_apt_upgrade_hook,
     list_active_sessions,
 )
 
@@ -197,6 +198,9 @@ def cmd_update(args: argparse.Namespace, config: AppConfig) -> None:
             subprocess.run([uv_bin, "sync", "--frozen", "--quiet"], cwd=str(install_dir), check=False)
             if not quiet:
                 print("✅ Dependencies synced with uv.")
+
+        # Refresh APT upgrade hooks
+        install_apt_upgrade_hook()
 
         # Restart systemd service
         subprocess.run(["systemctl", "restart", "parental-control.service"], check=False)
