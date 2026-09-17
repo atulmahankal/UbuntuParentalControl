@@ -527,6 +527,28 @@ def cmd_test_lockout(args: argparse.Namespace, config: AppConfig) -> None:
     print(f"\n✅ Lockout overlay exited: {res_str}\n")
 
 
+def cmd_fix_shortcuts(args: argparse.Namespace, config: AppConfig) -> None:
+    """Repair and restore standard desktop keybindings (Alt+Tab, Super, workspace switching)."""
+    from parentalcontrol.lockout_gui import restore_all_gnome_keybindings
+    print("\n🔧 Restoring standard GNOME desktop shortcuts (Alt+Tab, Super, workspaces)...")
+
+    target = getattr(args, "user", None)
+    if not target and hasattr(os, "geteuid") and os.geteuid() == 0:
+        import pwd
+        for p in pwd.getpwall():
+            if 1000 <= p.pw_uid < 60000:
+                restore_all_gnome_keybindings(target_user=p.pw_name)
+        print("✅ Restored desktop shortcuts for all system users.")
+    else:
+        restore_all_gnome_keybindings(target_user=target)
+        print("✅ Restored desktop shortcuts for current user.")
+
+    print("   • Alt+Tab (Switch Windows): Active")
+    print("   • Super+Tab (Switch Applications): Active")
+    print("   • Super Key (Overview): Active\n")
+
+
+
 def cmd_override(args: argparse.Namespace, config: AppConfig) -> None:
     """Manage temporary parent overrides."""
     import time
@@ -670,6 +692,10 @@ def main() -> None:
     p_ovr.add_argument("--list", action="store_true", help="List all active overrides")
     p_ovr.add_argument("--revoke", action="store_true", help="Revoke active override for user")
 
+    # Command: fix-shortcuts
+    p_fix = subparsers.add_parser("fix-shortcuts", parents=[config_parent_parser], help="Repair and restore GNOME desktop shortcuts (Alt+Tab, Super)")
+    p_fix.add_argument("--user", help="Specific username to restore shortcuts for")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -703,6 +729,8 @@ def main() -> None:
         cmd_test_lockout(args, config)
     elif args.command == "override":
         cmd_override(args, config)
+    elif args.command == "fix-shortcuts":
+        cmd_fix_shortcuts(args, config)
     else:
         cmd_service_status(args, config)
 

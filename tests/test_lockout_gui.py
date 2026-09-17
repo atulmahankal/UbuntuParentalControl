@@ -80,26 +80,16 @@ def test_filter_lockout_key_event():
 
 
 def test_gnome_keybinding_suppressor():
+    from parentalcontrol.lockout_gui import restore_all_gnome_keybindings
     suppressor = GnomeKeybindingSuppressor()
-    with patch("subprocess.run") as mock_run:
-        # Mock get returning valid values
-        def fake_run(cmd, *args, **kwargs):
-            m = MagicMock()
-            if cmd[1] == "get":
-                m.returncode = 0
-                m.stdout = "['<Alt>Tab']\n"
-            else:
-                m.returncode = 0
-            return m
-
-        mock_run.side_effect = fake_run
-
+    with patch("parentalcontrol.lockout_gui.restore_all_gnome_keybindings") as mock_restore:
         with suppressor:
             assert suppressor._active is True
-            assert len(suppressor._backup) > 0
+            mock_restore.assert_called_once()
 
         assert suppressor._active is False
-        assert len(suppressor._backup) == 0
+        assert mock_restore.call_count == 2
+
 
 
 def test_lockout_gui_login_denial_title():

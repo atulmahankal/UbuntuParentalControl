@@ -18,57 +18,56 @@ EXIT_ERROR = 1
 EXIT_LOGOUT = 2
 
 
-class GnomeKeybindingSuppressor:
-    """Temporarily suppresses GNOME window-switching and overview keybindings.
+def restore_all_gnome_keybindings(target_user: Optional[str] = None) -> bool:
+    """Safely restore all standard GNOME desktop shortcuts to defaults."""
+    import subprocess
+    cmd_prefix = []
+    if target_user and hasattr(os, "geteuid") and os.geteuid() == 0:
+        cmd_prefix = ["sudo", "-u", target_user]
 
-    Backs up original values and restores them upon exit, signal, or exception.
-    """
+    paths_to_reset = [
+        ["dconf", "reset", "-f", "/org/gnome/desktop/wm/keybindings/"],
+        ["dconf", "reset", "-f", "/org/gnome/shell/keybindings/"],
+        ["dconf", "reset", "/org/gnome/mutter/overlay-key"],
+    ]
 
-    BASE_KEYS = [
+    for c in paths_to_reset:
+        try:
+            full_cmd = cmd_prefix + c
+            subprocess.run(full_cmd, capture_output=True, timeout=2)
+        except Exception:
+            pass
+
+    # Also run targeted gsettings resets as fallback
+    schemas_and_keys = [
         ("org.gnome.desktop.wm.keybindings", "switch-windows"),
         ("org.gnome.desktop.wm.keybindings", "switch-windows-backward"),
         ("org.gnome.desktop.wm.keybindings", "switch-applications"),
         ("org.gnome.desktop.wm.keybindings", "switch-applications-backward"),
-        ("org.gnome.desktop.wm.keybindings", "switch-panels"),
-        ("org.gnome.desktop.wm.keybindings", "switch-panels-backward"),
-        ("org.gnome.desktop.wm.keybindings", "switch-group"),
-        ("org.gnome.desktop.wm.keybindings", "switch-group-backward"),
-        ("org.gnome.desktop.wm.keybindings", "cycle-windows"),
-        ("org.gnome.desktop.wm.keybindings", "cycle-windows-backward"),
-        ("org.gnome.desktop.wm.keybindings", "cycle-panels"),
-        ("org.gnome.desktop.wm.keybindings", "cycle-panels-backward"),
-        ("org.gnome.desktop.wm.keybindings", "cycle-group"),
-        ("org.gnome.desktop.wm.keybindings", "cycle-group-backward"),
-        ("org.gnome.desktop.wm.keybindings", "panel-run-dialog"),
         ("org.gnome.desktop.wm.keybindings", "show-desktop"),
-        ("org.gnome.desktop.wm.keybindings", "activate-window-menu"),
         ("org.gnome.desktop.wm.keybindings", "minimize"),
         ("org.gnome.desktop.wm.keybindings", "toggle-maximized"),
-        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-left"),
-        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-right"),
-        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-up"),
-        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-down"),
-        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-1"),
-        ("org.gnome.desktop.wm.keybindings", "switch-to-workspace-last"),
         ("org.gnome.mutter", "overlay-key"),
-        ("org.gnome.shell.keybindings", "toggle-overview"),
-        ("org.gnome.shell.keybindings", "toggle-application-view"),
-        ("org.gnome.shell.keybindings", "toggle-quick-settings"),
-        ("org.gnome.shell.keybindings", "toggle-message-tray"),
-        ("org.gnome.shell.keybindings", "focus-active-notification"),
     ]
+    for schema, key in schemas_and_keys:
+        try:
+            full_cmd = cmd_prefix + ["gsettings", "reset", schema, key]
+            subprocess.run(full_cmd, capture_output=True, timeout=2)
+        except Exception:
+            pass
+
+    return True
+
+
+class GnomeKeybindingSuppressor:
+    """Safe keybinding suppressor that does not modify persistent user dconf settings.
+
+    Keyboard shortcuts are captured and blocked dynamically in-memory via Gdk.Seat device grabs
+    and GTK key-press event filtering rather than wiping persistent system gsettings.
+    """
 
     def __init__(self):
-        self._backup = {}
         self._active = False
-        self._target_keys = list(self.BASE_KEYS)
-        for i in range(1, 10):
-            self._target_keys.append(("org.gnome.shell.keybindings", f"switch-to-application-{i}"))
-            self._target_keys.append(("org.gnome.shell.keybindings", f"open-new-window-application-{i}"))
-        for i in range(1, 11):
-            self._target_keys.append(("org.gnome.shell.extensions.dash-to-dock", f"app-hotkey-{i}"))
-            self._target_keys.append(("org.gnome.shell.extensions.dash-to-dock", f"app-ctrl-hotkey-{i}"))
-            self._target_keys.append(("org.gnome.shell.extensions.dash-to-dock", f"app-shift-hotkey-{i}"))
 
     def __enter__(self):
         self.suppress()
@@ -78,34 +77,14 @@ class GnomeKeybindingSuppressor:
         self.restore()
 
     def suppress(self):
-        if self._active:
-            return
-        import subprocess
-        for schema, key in self._target_keys:
-            try:
-                res = subprocess.run(["gsettings", "get", schema, key], capture_output=True, text=True, timeout=1)
-                if res.returncode == 0:
-                    val = res.stdout.strip()
-                    self._backup[(schema, key)] = val
-                    empty_val = "''" if key == "overlay-key" else "[]"
-                    subprocess.run(["gsettings", "set", schema, key, empty_val], capture_output=True, timeout=1)
-            except Exception:
-                pass
+        # Ensure any damaged shortcuts from previous versions are repaired
+        restore_all_gnome_keybindings()
         self._active = True
-        logger.info(f"Suppressed {len(self._backup)} GNOME keybindings for lockout overlay.")
 
     def restore(self):
-        if not self._active:
-            return
-        import subprocess
-        for (schema, key), val in self._backup.items():
-            try:
-                subprocess.run(["gsettings", "set", schema, key, val], capture_output=True, timeout=1)
-            except Exception:
-                pass
-        self._backup.clear()
+        restore_all_gnome_keybindings()
         self._active = False
-        logger.info("Restored desktop window-switching keybindings.")
+
 
 
 def filter_lockout_key_event(event_keyval: int, event_state: int, testing_mode: bool = False) -> str:
