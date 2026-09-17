@@ -162,6 +162,7 @@ def run_lockout_screen(
     next_session_info: Optional[str] = None,
     session_id: Optional[str] = None,
     testing_mode: bool = False,
+    is_login_denial: bool = False,
 ) -> int:
     """Launch the GTK3 fullscreen lockout overlay with global device grab."""
     try:
@@ -172,9 +173,25 @@ def run_lockout_screen(
         logger.error(f"GTK3 is not available: {e}")
         return _run_cli_fallback(child_user, exempt_users, reason, next_session_info)
 
-    # Initialize GTK
-    if not Gtk.init_check()[0]:
-        logger.warning("Cannot initialize GTK display (headless session).")
+    # Auto-detect WAYLAND_DISPLAY if socket exists in /run/user/<uid>
+    if "WAYLAND_DISPLAY" not in os.environ:
+        uid = os.getuid()
+        for i in range(4):
+            w_sock = f"/run/user/{uid}/wayland-{i}"
+            if os.path.exists(w_sock):
+                os.environ["WAYLAND_DISPLAY"] = f"wayland-{i}"
+                break
+
+    # Initialize GTK with retry loop (display server may take a moment on fresh login)
+    initialized = False
+    for _ in range(12):
+        if Gtk.init_check()[0]:
+            initialized = True
+            break
+        time.sleep(0.4)
+
+    if not initialized:
+        logger.warning("Cannot initialize GTK display (headless or display unavailable).")
         return _run_cli_fallback(child_user, exempt_users, reason, next_session_info)
 
     # Clean exempt users list: exclude system accounts, prefer human parent accounts (e.g. atul)
@@ -395,27 +412,50 @@ def run_lockout_screen(
     .btn-unlock:hover {
         background: #059669;
     }
+    .btn-save-work {
+        background: #f59e0b;
+        color: #0f172a;
+        font-weight: bold;
+        font-size: 14px;
+        padding: 10px 22px;
+        border-radius: 8px;
+        border: none;
+    }
+    .btn-save-work:hover {
+        background: #d97706;
+    }
     .btn-logout {
-        background: #ef4444;
+        background: #475569;
         color: #ffffff;
         font-weight: bold;
-        padding: 8px 20px;
+        padding: 9px 20px;
         border-radius: 8px;
         border: none;
     }
     .btn-logout:hover {
-        background: #dc2626;
+        background: #334155;
     }
-    .btn-test-exit {
-        background: #475569;
+    .btn-poweroff {
+        background: #dc2626;
         color: #ffffff;
         font-weight: bold;
-        padding: 8px 16px;
+        padding: 9px 20px;
+        border-radius: 8px;
+        border: none;
+    }
+    .btn-poweroff:hover {
+        background: #b91c1c;
+    }
+    .btn-test-exit {
+        background: #64748b;
+        color: #ffffff;
+        font-weight: bold;
+        padding: 9px 16px;
         border-radius: 8px;
         border: none;
     }
     .btn-test-exit:hover {
-        background: #334155;
+        background: #475569;
     }
     """
     css_provider.load_from_data(css)
@@ -444,7 +484,8 @@ def run_lockout_screen(
     header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     header_box.set_halign(Gtk.Align.CENTER)
 
-    title_label = Gtk.Label(label="⏰ Screen Time Ended")
+    title_str = "🔒 Login Restricted - Outside Permitted Hours" if (is_login_denial or "login" in reason.lower()) else "⏰ Screen Time Ended"
+    title_label = Gtk.Label(label=title_str)
     title_label.get_style_context().add_class("title-label")
     header_box.pack_start(title_label, True, True, 0)
     card.pack_start(header_box, False, False, 0)
@@ -468,7 +509,110 @@ def run_lockout_screen(
     safety_label.get_style_context().add_class("safety-label")
     card.pack_start(safety_label, False, False, 4)
 
-    # 4. Parent Override Box
+    # 4. 1-Time 5-Minute Extension (Save Work) Box
+    already_used_5m = False
+    try:
+        from parentalcontrol.ipc import send_ipc_request
+        ext_resp = send_ipc_request({
+            "action": "check_5m_extension_status",
+            "child_user": child_user,
+        })
+        already_used_5m = ext_resp.get("already_used", False)
+    except Exception:
+        try:
+            from parentalcontrol.override_manager import has_used_5m_extension_today
+            already_used_5m = has_used_5m_extension_today(child_user)
+        except Exception:
+            already_used_5m = False
+
+    work_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    work_box.get_style_context().add_class("override-box")
+
+    work_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    work_title = Gtk.Label(label="💾 Need to Save Your Work?")
+    work_title.get_style_context().add_class("section-title")
+    work_title.set_halign(Gtk.Align.START)
+    work_header.pack_start(work_title, True, True, 0)
+    work_box.pack_start(work_header, False, False, 0)
+
+    work_desc = Gtk.Label(
+        label="Get a 1-time 5-minute extension to save your open documents, code, or games before signing out."
+    )
+    work_desc.get_style_context().add_class("subtitle-label")
+    work_desc.set_line_wrap(True)
+    work_desc.set_halign(Gtk.Align.START)
+    work_box.pack_start(work_desc, False, False, 0)
+
+    work_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    work_action_box.set_halign(Gtk.Align.CENTER)
+
+    btn_extend_5m = Gtk.Button()
+    if already_used_5m:
+        btn_extend_5m.set_label("⏳ 5 Min Extension (Already Used Today)")
+        btn_extend_5m.set_sensitive(False)
+    else:
+        btn_extend_5m.set_label("⏳ Extend 5 Minutes to Save Work")
+        btn_extend_5m.get_style_context().add_class("btn-save-work")
+
+    work_status_label = Gtk.Label(label="")
+    work_status_label.set_line_wrap(True)
+    if already_used_5m:
+        work_status_label.set_text("⚠️ Your 1-time 5-minute extension for today has already been used.")
+        work_status_label.get_style_context().add_class("status-error")
+
+    def do_extend_5m(*args):
+        btn_extend_5m.set_sensitive(False)
+        work_status_label.set_text("Granting 5-minute extension...")
+
+        success = False
+        err_msg = "Could not grant extension."
+
+        try:
+            from parentalcontrol.ipc import send_ipc_request
+            resp = send_ipc_request({
+                "action": "request_5m_extension",
+                "child_user": child_user,
+                "session_id": session_id,
+            })
+            if resp.get("success"):
+                success = True
+            else:
+                err_msg = resp.get("error", "Extension request denied.")
+        except Exception:
+            try:
+                from parentalcontrol.override_manager import grant_5m_work_extension
+                grant_5m_work_extension(child_user)
+                success = True
+            except Exception as e:
+                err_msg = str(e)
+
+        if success:
+            work_status_label.set_text("✅ 5-minute extension granted! Save all your work now. Screen locks in 5 minutes.")
+            work_status_label.get_style_context().remove_class("status-error")
+            work_status_label.get_style_context().add_class("status-success")
+            btn_extend_5m.set_label("⏳ 5-Minute Extension Active")
+
+            try:
+                from parentalcontrol.notifier import play_alert_sound
+                play_alert_sound("complete")
+            except Exception:
+                pass
+
+            exit_code[0] = EXIT_UNLOCKED
+            ungrab_devices()
+            GLib.timeout_add(1000, Gtk.main_quit)
+        else:
+            work_status_label.set_text(f"❌ {err_msg}")
+            work_status_label.get_style_context().remove_class("status-success")
+            work_status_label.get_style_context().add_class("status-error")
+
+    btn_extend_5m.connect("clicked", do_extend_5m)
+    work_action_box.pack_start(btn_extend_5m, False, False, 0)
+    work_box.pack_start(work_action_box, False, False, 4)
+    work_box.pack_start(work_status_label, False, False, 0)
+    card.pack_start(work_box, False, False, 0)
+
+    # 5. Parent Override Box
     override_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
     override_card.get_style_context().add_class("override-box")
 
@@ -612,11 +756,11 @@ def run_lockout_screen(
 
     card.pack_start(override_card, False, False, 0)
 
-    # 5. Bottom Actions (Logout & Test Mode Exit)
+    # 6. Bottom Actions (Log Out, Power Off, Test Mode Exit)
     bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
     bottom_box.set_halign(Gtk.Align.CENTER)
 
-    btn_logout = Gtk.Button(label="🚪 Log Out Now")
+    btn_logout = Gtk.Button(label="🚪 Log Out")
     btn_logout.get_style_context().add_class("btn-logout")
 
     def do_logout(*args):
@@ -635,6 +779,28 @@ def run_lockout_screen(
 
     btn_logout.connect("clicked", do_logout)
     bottom_box.pack_start(btn_logout, False, False, 0)
+
+    btn_poweroff = Gtk.Button(label="⏻ Power Off")
+    btn_poweroff.get_style_context().add_class("btn-poweroff")
+
+    def do_poweroff(*args):
+        exit_code[0] = EXIT_LOGOUT
+        ungrab_devices()
+        try:
+            from parentalcontrol.ipc import send_ipc_request
+            send_ipc_request({
+                "action": "poweroff_request",
+            })
+        except Exception:
+            try:
+                import subprocess
+                subprocess.Popen(["systemctl", "poweroff"])
+            except Exception:
+                pass
+        Gtk.main_quit()
+
+    btn_poweroff.connect("clicked", do_poweroff)
+    bottom_box.pack_start(btn_poweroff, False, False, 0)
 
     if testing_mode:
         btn_exit_test = Gtk.Button(label="❌ Exit Test (Esc)")
@@ -698,11 +864,11 @@ def _run_cli_fallback(
 ) -> int:
     """Terminal fallback for environments without graphical desktop."""
     print("\n" + "=" * 60)
-    print("⏰ PARENTAL CONTROL - SCREEN TIME ENDED")
+    print("⏰ PARENTAL CONTROL - SCREEN TIME RESTRICTED")
     print(reason)
     if next_session_info:
         print(f"Next session: {next_session_info}")
     print("=" * 60)
-    print("1. Log Out")
-    print("2. Enter Parent Password to Extend")
+    print("Signing out in 10 seconds...\n")
+    time.sleep(10)
     return EXIT_LOGOUT

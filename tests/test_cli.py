@@ -52,3 +52,45 @@ def test_cli_version_flag(capsys):
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert __version__ in captured.out or __version__ in captured.err
+
+
+def test_cli_check_pam(capsys):
+    import sys
+    from parentalcontrol.cli import cmd_check
+    from parentalcontrol.models import AccessResult, TimeSlot
+    from datetime import datetime, time
+
+    cfg = AppConfig(rules=RulesConfig(target_users=["himanshu"], exempt_users=["atul"]))
+
+    # Test allowed
+    with patch("parentalcontrol.cli.GoogleSheetClient.fetch_rules", return_value=([], False, 0)), \
+         patch("parentalcontrol.cli.evaluate_access") as mock_eval:
+        mock_eval.return_value = AccessResult(
+            is_allowed=True,
+            reason="Within scheduled slot",
+            user="himanshu",
+            current_time=datetime.now(),
+        )
+        args = argparse.Namespace(user="himanshu", device="optiplex", url=None, pam=True)
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_check(args, cfg)
+        assert exc_info.value.code == 0
+
+    # Test denied
+    with patch("parentalcontrol.cli.GoogleSheetClient.fetch_rules", return_value=([], False, 0)), \
+         patch("parentalcontrol.cli.evaluate_access") as mock_eval:
+        mock_eval.return_value = AccessResult(
+            is_allowed=False,
+            reason="Outside allowed hours",
+            user="himanshu",
+            current_time=datetime.now(),
+            next_slot=TimeSlot(start_time=time(16, 0), end_time=time(20, 0), allowed=True),
+        )
+        args = argparse.Namespace(user="himanshu", device="optiplex", url=None, pam=True)
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_check(args, cfg)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Parental Control: Computer access is restricted" in captured.out
+        assert "4:00 PM - 8:00 PM" in captured.out
+

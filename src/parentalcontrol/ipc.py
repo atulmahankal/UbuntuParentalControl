@@ -39,11 +39,13 @@ class ParentalControlIPCServer:
         socket_path: Optional[Path] = None,
         on_override: Optional[Callable[[str, str, int], None]] = None,
         on_logout: Optional[Callable[[Optional[str], str], None]] = None,
+        on_poweroff: Optional[Callable[[], None]] = None,
     ):
         self.exempt_users = [u.lower().strip() for u in exempt_users]
         self.socket_path = socket_path or get_socket_path()
         self.on_override = on_override
         self.on_logout = on_logout
+        self.on_poweroff = on_poweroff
         self._running = False
         self._server_sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
@@ -183,6 +185,59 @@ class ParentalControlIPCServer:
                 except Exception as e:
                     logger.warning(f"Error in on_logout callback: {e}")
             return {"success": True, "message": "Logout triggered."}
+
+        if action == "poweroff_request":
+            logger.info("IPC Server: System power off requested from lockout screen.")
+            if self.on_poweroff:
+                try:
+                    self.on_poweroff()
+                except Exception as e:
+                    logger.warning(f"Error in on_poweroff callback: {e}")
+            else:
+                import subprocess
+                subprocess.Popen(["systemctl", "poweroff"])
+            return {"success": True, "message": "Power off initiated."}
+
+        if action == "check_5m_extension_status":
+            child_user = req.get("child_user", "").strip()
+            from parentalcontrol.override_manager import has_used_5m_extension_today
+            already_used = has_used_5m_extension_today(child_user)
+            return {
+                "success": True,
+                "can_extend": not already_used,
+                "already_used": already_used,
+            }
+
+        if action == "request_5m_extension":
+            child_user = req.get("child_user", "").strip()
+            if not child_user:
+                return {"success": False, "error": "Missing child_user field."}
+
+            from parentalcontrol.override_manager import (
+                has_used_5m_extension_today,
+                grant_5m_work_extension,
+            )
+            if has_used_5m_extension_today(child_user):
+                return {
+                    "success": False,
+                    "error": "The one-time 5-minute work extension has already been used today.",
+                }
+
+            try:
+                rec = grant_5m_work_extension(child_user)
+                if self.on_override:
+                    try:
+                        self.on_override(child_user, "Self (Save Work)", 5)
+                    except Exception as e:
+                        logger.warning(f"Error in on_override callback: {e}")
+                return {
+                    "success": True,
+                    "message": "5-minute extension granted. Please save your open work now!",
+                    "duration_minutes": 5,
+                    "expires_at": rec.get("expires_at"),
+                }
+            except Exception as e:
+                return {"success": False, "error": str(e)}
 
         return {"success": False, "error": f"Unknown action '{action}'"}
 

@@ -162,3 +162,52 @@ def test_handle_session_expired_wording():
         mock_lockout.assert_called_once()
         _, lockout_kwargs = mock_lockout.call_args
         assert lockout_kwargs["next_session_info"] == ""
+
+
+def test_wait_for_user_display(tmp_path, monkeypatch):
+    from parentalcontrol.system_service import wait_for_user_display
+    # Create fake /run/user/1005/wayland-0
+    run_dir = tmp_path / "1005"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "wayland-0").touch()
+
+    monkeypatch.setattr("parentalcontrol.system_service.Path", lambda p: run_dir if str(p) == "/run/user/1005" else Path(p))
+    env = wait_for_user_display(1005, "himanshu", timeout_seconds=1.0)
+    assert env["USER"] == "himanshu"
+
+
+def test_poweroff_system():
+    from parentalcontrol.system_service import poweroff_system
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        assert poweroff_system() is True
+        mock_run.assert_called_with(["systemctl", "poweroff"], capture_output=True, timeout=5)
+
+
+def test_handle_login_denial_passes_flag():
+    from datetime import datetime
+    from parentalcontrol.models import AccessResult
+    from parentalcontrol.system_service import UserSession
+    from parentalcontrol.system_daemon import SystemParentalControlDaemon
+
+    cfg = AppConfig(
+        rules=RulesConfig(target_users=["alex"], exempt_users=[]),
+        warnings=WarningsConfig(play_sound=False, show_notifications=False),
+    )
+    daemon = SystemParentalControlDaemon(config=cfg)
+    sess = UserSession(session_id="2", uid=1001, username="alex", seat="seat0", session_type="wayland", state="active")
+    eval_res = AccessResult(
+        is_allowed=False,
+        reason="Outside allowed schedule",
+        user="alex",
+        current_time=datetime(2026, 9, 5, 11, 0),
+        allowed_slots_today=[],
+        next_slot=None,
+    )
+    with patch.object(daemon, "_enforce_lockout_overlay") as mock_lockout:
+        daemon._handle_login_denial(sess, eval_res)
+        mock_lockout.assert_called_once()
+        _, kwargs = mock_lockout.call_args
+        assert kwargs["is_login_denial"] is True
+        assert "Login is not permitted" in kwargs["reason"]
+

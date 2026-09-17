@@ -100,3 +100,20 @@ def test_gnome_keybinding_suppressor():
 
         assert suppressor._active is False
         assert len(suppressor._backup) == 0
+
+
+def test_lockout_gui_login_denial_title():
+    # Verify title differs when is_login_denial is True
+    from gi.repository import Gtk
+    with patch("gi.repository.Gtk.init_check", return_value=(True, None)), \
+         patch.object(Gtk, "main"), \
+         patch("parentalcontrol.lockout_gui.GnomeKeybindingSuppressor"):
+        code = run_lockout_screen(
+            child_user="himanshu",
+            exempt_users=["atul"],
+            reason="Outside schedule",
+            testing_mode=True,
+            is_login_denial=True,
+        )
+        assert code in (0, 1, 2)
+

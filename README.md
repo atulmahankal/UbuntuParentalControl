@@ -232,16 +232,19 @@ enforcement:
   1. **Resilient Shell Wrapper**: `/usr/local/bin/parentalcontrol` is deployed as an auto-healing launcher script rather than a direct symlink. On every invocation, it verifies if the virtualenv interpreter can execute Python code. If broken or missing, it automatically invokes `uv venv --clear --python /usr/bin/python3 && uv sync --quiet` to rebuild the venv instantly with the host's new Python version.
   2. **APT Post-Invoke Hook**: An automatic hook is registered at `/etc/apt/apt.conf.d/99parentalcontrol` which triggers venv self-healing automatically after any `apt-get upgrade` or release upgrade transaction.
   3. **System Service Resilience**: The systemd service unit executes via the self-healing launcher, ensuring background service recovery across OS upgrades without manual intervention.
-### Safe Lockout Screen & Parent Extension (v1.0.5)
+### Safe Lockout Screen, Save-Work Extender & Power Controls (v1.0.6)
 - **Work Preservation**: When a child's session reaches timeout (or login outside schedule), the application does **not** abruptly kill processes or break ongoing work (such as long-running terminal commands, 30-minute builds, renders, or downloads).
 - **Always-on-Top Lockout Overlay**: Displays a fullscreen, modal GTK3 overlay that blocks keyboard/mouse access to other applications while background tasks continue executing safely.
 - **Desktop Keybinding Suppression**: Automatically backs up and suppresses GNOME window-switching (`Alt+Tab`, `Super+Tab`, `Ctrl+Alt+Tab`), workspace navigation, and overview hotkeys during lockout, restoring them cleanly upon exit.
 - **Hardened Input Filtering**: Intercepts `Ctrl+Tab`, function keys (`F1`–`F12`), and external shortcuts while preserving standard clipboard text navigation inside the parent password field.
-- **Two Exclusive Actions**:
-  1. **Log Out Now**: Voluntarily ends the session cleanly.
-  2. **Parent Extension / Temporary Allow**: The parent selects their account (from `rules.exempt_users`, e.g. `atul`), selects an extension duration (15m, 30m, 45m, 1h, 2h, or Rest of Today), and enters their password.
-- **System PAM Authentication**: Authenticated securely via Ubuntu's PAM stack (`libpam.so.0`). If valid, grants the temporary override and dismisses the overlay without restarting the desktop.
-- **Anti-Tampering Watchdog**: If the child attempts to kill or terminate the lockout process without parent authorization, the root system daemon instantly detects the breach and terminates the session (`loginctl terminate-session`).
+- **Clear Lockout Screen Actions**:
+  1. **🚪 Log Out**: Voluntarily ends the session cleanly and returns to the GDM login screen.
+  2. **⏻ Power Off**: Safely shuts down the computer directly from the lockout screen.
+  3. **💾 Save Work (1-Time 5-Minute Emergency Extender)**: Children can click this button once per day when their session expires to gain 5 minutes of access to save unsaved files, finish games, or close applications.
+  4. **🔑 Parent Extension / Temporary Allow**: The parent selects their account (from `rules.exempt_users`, e.g. `atul`), selects an extension duration (15m, 30m, 45m, 1h, 2h, or Rest of Today), and enters their password.
+- **Restricted Time Login Handling**: If a child attempts to log in during restricted hours, the lockout overlay appears with the title **"🔒 Login Restricted"**, showing the exact reason, the allowed schedule today, when the next session starts, and gives the parent the opportunity to unlock or the child to Log Out or Power Off.
+- **System PAM Authentication & Verification**: Authenticated securely via Ubuntu's PAM stack (`libpam.so.0`). If valid, grants the temporary override and dismisses the overlay without restarting the desktop. Optional `--pam` CLI mode (`parentalcontrol check --pam --user <username>`) for PAM module integration.
+- **Anti-Tampering Watchdog**: If the child attempts to kill or terminate the lockout process without authorization, the root system daemon instantly detects the breach and terminates the session (`loginctl terminate-session`).
 - **Interactive Testing & Overrides**:
   - Test overlay on desktop: `parentalcontrol test-lockout`
   - Manage overrides via CLI: `parentalcontrol override --user himanshu --minutes 30` (or `--list`, `--revoke`)

@@ -12,8 +12,136 @@ logger = logging.getLogger(__name__)
 
 # Primary runtime directory for active override state
 OVERRIDE_RUN_DIR = Path("/run/parental-control")
+OVERRIDE_PERSIST_DIR = Path("/var/lib/parental-control")
 OVERRIDE_FALLBACK_DIR = Path("/tmp/parental-control")
 OVERRIDE_FILE_NAME = "overrides.json"
+EXTENSIONS_FILE_NAME = "extensions_5m.json"
+
+
+def _get_extension_file_path() -> Path:
+    """Return the active path for storing 5-minute extension state."""
+    env_ext = os.environ.get("PARENTAL_CONTROL_EXTENSIONS_FILE")
+    if env_ext:
+        return Path(env_ext)
+
+    for base in [OVERRIDE_PERSIST_DIR, OVERRIDE_RUN_DIR, OVERRIDE_FALLBACK_DIR]:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            try:
+                base.chmod(0o777)
+            except Exception:
+                pass
+            test_file = base / ".write_test_ext"
+            test_file.touch()
+            test_file.unlink()
+            return base / EXTENSIONS_FILE_NAME
+        except Exception:
+            continue
+    return OVERRIDE_FALLBACK_DIR / EXTENSIONS_FILE_NAME
+
+
+def load_all_extensions_state(file_path: Optional[Path] = None) -> Dict[str, dict]:
+    """Load extension history for all users."""
+    p = file_path or _get_extension_file_path()
+    if not p.exists():
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to read 5m extensions state from {p}: {e}")
+        return {}
+
+
+def _save_extensions_state(data: Dict[str, dict], file_path: Optional[Path] = None) -> bool:
+    """Save extension state atomically to disk."""
+    p = file_path or _get_extension_file_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = p.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        try:
+            tmp_path.chmod(0o666)
+        except Exception:
+            pass
+        tmp_path.replace(p)
+        try:
+            p.chmod(0o666)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.error(f"Failed to write 5m extensions state to {p}: {e}")
+        return False
+
+
+def has_used_5m_extension_today(
+    username: str,
+    file_path: Optional[Path] = None,
+    check_date: Optional[str] = None,
+) -> bool:
+    """Return True if the user has already used their 1-time 5-minute extension today."""
+    today_str = check_date or datetime.now().strftime("%Y-%m-%d")
+    state = load_all_extensions_state(file_path)
+    user_record = state.get(username.lower().strip())
+    if not user_record or not isinstance(user_record, dict):
+        return False
+    return user_record.get("date") == today_str
+
+
+def grant_5m_work_extension(
+    child_user: str,
+    file_path: Optional[Path] = None,
+    overrides_path: Optional[Path] = None,
+) -> dict:
+    """Grant a 1-time 5-minute emergency extension so the child can save unsaved work."""
+    child_clean = child_user.lower().strip()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    p = file_path or _get_extension_file_path()
+    if has_used_5m_extension_today(child_clean, file_path=p, check_date=today_str):
+        raise ValueError("One-time 5-minute work extension has already been used today.")
+
+    now_ts = time.time()
+    # 1. Grant standard 5-minute override
+    override_rec = grant_temporary_override(
+        child_user=child_clean,
+        parent_user="Self-Service (Save Work)",
+        duration_minutes=5,
+        file_path=overrides_path,
+    )
+
+    # 2. Record that extension was used today
+    state = load_all_extensions_state(p)
+    state[child_clean] = {
+        "user": child_clean,
+        "date": today_str,
+        "used_at": now_ts,
+        "expires_at": override_rec.get("expires_at", now_ts + 300),
+    }
+    _save_extensions_state(state, p)
+
+    logger.info(f"Granted 1-time 5m work saving extension to '{child_clean}' for {today_str}.")
+    return {
+        "success": True,
+        "duration_minutes": 5,
+        "expires_at": override_rec.get("expires_at"),
+        "date": today_str,
+    }
+
+
+def reset_5m_extension(username: str, file_path: Optional[Path] = None) -> bool:
+    """Reset the 1-time 5-minute extension state for username (admin/testing)."""
+    p = file_path or _get_extension_file_path()
+    state = load_all_extensions_state(p)
+    child_clean = username.lower().strip()
+    if child_clean in state:
+        del state[child_clean]
+        _save_extensions_state(state, p)
+        return True
+    return False
+
 
 
 def _get_override_file_path() -> Path:

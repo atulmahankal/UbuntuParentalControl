@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -113,19 +114,67 @@ def _get_session_details(session_id: str, uid: int, username: str, seat: str) ->
 def _get_user_env(uid: int, username: str) -> Dict[str, str]:
     """Construct environment variables required to interact with a user's desktop display."""
     env = os.environ.copy()
-    runtime_dir = f"/run/user/{uid}"
-    env["XDG_RUNTIME_DIR"] = runtime_dir
+    runtime_dir = Path(f"/run/user/{uid}")
+    env["XDG_RUNTIME_DIR"] = str(runtime_dir)
     env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={runtime_dir}/bus"
     env["USER"] = username
     env["HOME"] = f"/home/{username}"
 
-    # Wayland or X11 display detection
-    if os.path.exists(f"{runtime_dir}/wayland-0"):
-        env["WAYLAND_DISPLAY"] = "wayland-0"
+    # Wayland display detection (check wayland-0, wayland-1, etc.)
+    for i in range(4):
+        w_sock = runtime_dir / f"wayland-{i}"
+        if w_sock.exists():
+            env["WAYLAND_DISPLAY"] = f"wayland-{i}"
+            break
+
+    # X11 display detection
     if not env.get("DISPLAY"):
-        env["DISPLAY"] = ":0"
+        for i in range(4):
+            x_sock = Path(f"/tmp/.X11-unix/X{i}")
+            if x_sock.exists():
+                env["DISPLAY"] = f":{i}"
+                break
+        if not env.get("DISPLAY"):
+            env["DISPLAY"] = ":0"
+
+    # Xauthority detection for X11/Xwayland
+    user_home_xauth = Path(f"/home/{username}/.Xauthority")
+    if user_home_xauth.exists():
+        env["XAUTHORITY"] = str(user_home_xauth)
+    elif runtime_dir.exists():
+        for f in runtime_dir.glob(".mutter-Xwaylandauth.*"):
+            env["XAUTHORITY"] = str(f)
+            break
+        if "XAUTHORITY" not in env:
+            run_xauth = runtime_dir / "Xauthority"
+            if run_xauth.exists():
+                env["XAUTHORITY"] = str(run_xauth)
 
     return env
+
+
+def wait_for_user_display(uid: int, username: str, timeout_seconds: float = 8.0) -> Dict[str, str]:
+    """Wait for a user's GUI display server (Wayland socket or X11) to be ready."""
+    deadline = time.time() + max(1.0, timeout_seconds)
+    runtime_dir = Path(f"/run/user/{uid}")
+
+    while time.time() < deadline:
+        # Check if Wayland socket exists
+        for i in range(4):
+            if (runtime_dir / f"wayland-{i}").exists():
+                logger.debug(f"User display ready: wayland-{i} found for '{username}'.")
+                return _get_user_env(uid, username)
+
+        # Check if X11 socket exists
+        for i in range(4):
+            if Path(f"/tmp/.X11-unix/X{i}").exists():
+                logger.debug(f"User display ready: X{i} found for '{username}'.")
+                return _get_user_env(uid, username)
+
+        time.sleep(0.3)
+
+    logger.warning(f"Display wait timed out after {timeout_seconds}s for user '{username}'. Using best-effort env.")
+    return _get_user_env(uid, username)
 
 
 def run_in_user_session(
@@ -134,12 +183,13 @@ def run_in_user_session(
     command: List[str],
     timeout: Optional[int] = None,
     async_proc: bool = False,
+    wait_display: bool = False,
 ) -> Optional[subprocess.Popen]:
     """Execute a command (such as notify-send or zenity) inside a user's GUI session."""
     if uid < 1000 or username.lower().strip() in SYSTEM_EXEMPT_USERS:
         return None
 
-    user_env = _get_user_env(uid, username)
+    user_env = wait_for_user_display(uid, username) if wait_display else _get_user_env(uid, username)
 
     # Use sudo -u <user> or su if running as root
     if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -154,6 +204,8 @@ def run_in_user_session(
         ]
         if "WAYLAND_DISPLAY" in user_env:
             full_cmd.append(f"WAYLAND_DISPLAY={user_env['WAYLAND_DISPLAY']}")
+        if "XAUTHORITY" in user_env:
+            full_cmd.append(f"XAUTHORITY={user_env['XAUTHORITY']}")
         full_cmd.extend(command)
     else:
         full_cmd = command
@@ -469,3 +521,21 @@ def uninstall_system_service() -> bool:
         return True
 
     return False
+
+
+def poweroff_system() -> bool:
+    """Initiate a clean system poweroff / shutdown."""
+    logger.info("Executing system poweroff...")
+    for cmd in [
+        ["systemctl", "poweroff"],
+        ["systemctl", "-i", "poweroff"],
+        ["loginctl", "poweroff"],
+    ]:
+        try:
+            res = subprocess.run(cmd, capture_output=True, timeout=5)
+            if res.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
+

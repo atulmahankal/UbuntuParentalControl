@@ -242,11 +242,15 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
     """Run one-off login access check."""
     user = args.user or getpass.getuser()
     device = getattr(args, "device", None) or config.effective_device_name
-    print(f"Checking parental control access for user '{user}' on device '{device}' at {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}...")
+    is_pam = getattr(args, "pam", False)
+
+    if not is_pam:
+        print(f"Checking parental control access for user '{user}' on device '{device}' at {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}...")
 
     if not config.is_user_targeted(user):
-        print(f"✅ User '{user}' is exempt from parental control.")
-        return
+        if not is_pam:
+            print(f"✅ User '{user}' is exempt from parental control.")
+        sys.exit(0)
 
     url = args.url or config.google_sheet.url
     client = GoogleSheetClient(
@@ -259,6 +263,9 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
     try:
         rules, is_cached, age = client.fetch_rules(use_cache_on_failure=True)
     except Exception as e:
+        if is_pam:
+            print(f"Parental Control Error: {e}")
+            sys.exit(1)
         print(f"❌ Error fetching schedule: {e}")
         sys.exit(1)
 
@@ -270,6 +277,15 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
         is_cached=is_cached,
         cache_age_seconds=age,
     )
+
+    if is_pam:
+        if result.is_allowed:
+            sys.exit(0)
+        else:
+            reason = result.reason.rstrip(".")
+            next_info = f" Next allowed session: {result.next_slot.formatted_range()}." if result.next_slot else ""
+            print(f"Parental Control: Computer access is restricted ({reason}).{next_info}")
+            sys.exit(1)
 
     if result.is_allowed:
         print(f"✅ ACCESS GRANTED")
@@ -287,6 +303,7 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
             print(f"   Allowed Hours Today: {slots_str}")
         if result.next_slot:
             print(f"   Next Allowed Window: {result.next_slot.formatted_range()}")
+        sys.exit(1)
 
 
 def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
@@ -486,6 +503,7 @@ def cmd_lockout_screen(args: argparse.Namespace, config: AppConfig) -> None:
         next_session_info=args.next_session,
         session_id=args.session_id,
         testing_mode=args.testing,
+        is_login_denial=getattr(args, "login_denial", False),
     )
     sys.exit(code)
 
@@ -612,6 +630,7 @@ def main() -> None:
     p_check.add_argument("--device", help="Device name/hostname to check against")
     p_check.add_argument("--url", help="Override Google Sheet URL")
     p_check.add_argument("--dry-run", action="store_true", help="Dry-run test check")
+    p_check.add_argument("--pam", action="store_true", help="Format output for PAM authentication module")
 
     # Command: test-sheet
     p_test = subparsers.add_parser("test-sheet", parents=[config_parent_parser], help="Test fetching and parsing Google Sheet")
@@ -637,6 +656,7 @@ def main() -> None:
     p_lockout.add_argument("--next-session", help="Next allowed session text")
     p_lockout.add_argument("--session-id", help="Active loginctl session ID")
     p_lockout.add_argument("--testing", action="store_true", help="Windowed testing mode (Esc to close)")
+    p_lockout.add_argument("--login-denial", action="store_true", help="Screen triggered due to login denial")
 
     # Command: test-lockout (user-facing quick test)
     p_tlock = subparsers.add_parser("test-lockout", parents=[config_parent_parser], help="Test the lockout screen overlay on desktop")
