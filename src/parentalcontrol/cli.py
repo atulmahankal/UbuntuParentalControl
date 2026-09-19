@@ -195,6 +195,7 @@ def cmd_update(args: argparse.Namespace, config: AppConfig) -> None:
         print(f"🔄 Updating Parental Control in {install_dir}...")
     try:
         if (install_dir / ".git").exists():
+            subprocess.run(["git", "-C", str(install_dir), "reset", "--hard", "HEAD", "--quiet"], check=False)
             subprocess.run(["git", "-C", str(install_dir), "pull", "--rebase", "--quiet"], check=True)
             if not quiet:
                 print("✅ Git repository updated.")
