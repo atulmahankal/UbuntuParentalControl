@@ -1,6 +1,6 @@
 """Parental Control package for Ubuntu."""
 
-__version__ = "1.0.7"
+__version__ = "1.0.8"
 
 from parentalcontrol.cli import main
 

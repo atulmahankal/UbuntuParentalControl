@@ -107,3 +107,15 @@ def test_lockout_gui_login_denial_title():
         )
         assert code in (0, 1, 2)
 
+
+def test_ipc_rejects_5m_extension_on_login_denial():
+    from parentalcontrol.ipc import ParentalControlIPCServer
+    server = ParentalControlIPCServer(exempt_users=["atul"])
+    res = server._dispatch({
+        "action": "request_5m_extension",
+        "child_user": "himanshi",
+        "is_login_denial": True,
+    })
+    assert res["success"] is False
+    assert "only available to save work when an active session ends" in res["error"]
+

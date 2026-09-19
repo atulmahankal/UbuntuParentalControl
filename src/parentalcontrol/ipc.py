@@ -213,6 +213,12 @@ class ParentalControlIPCServer:
             if not child_user:
                 return {"success": False, "error": "Missing child_user field."}
 
+            if req.get("is_login_denial", False):
+                return {
+                    "success": False,
+                    "error": "The 5-minute extension is only available to save work when an active session ends, not for new logins.",
+                }
+
             from parentalcontrol.override_manager import (
                 has_used_5m_extension_today,
                 grant_5m_work_extension,

@@ -163,11 +163,18 @@ def run_lockout_screen(
 
     # Initialize GTK with retry loop (display server may take a moment on fresh login)
     initialized = False
-    for _ in range(12):
+    uid = os.getuid()
+    for _ in range(30):
+        if "WAYLAND_DISPLAY" not in os.environ:
+            for i in range(4):
+                w_sock = f"/run/user/{uid}/wayland-{i}"
+                if os.path.exists(w_sock):
+                    os.environ["WAYLAND_DISPLAY"] = f"wayland-{i}"
+                    break
         if Gtk.init_check()[0]:
             initialized = True
             break
-        time.sleep(0.4)
+        time.sleep(0.5)
 
     if not initialized:
         logger.warning("Cannot initialize GTK display (headless or display unavailable).")
@@ -179,12 +186,22 @@ def run_lockout_screen(
         u.strip() for u in exempt_users
         if u.lower().strip() not in exclude_users and u.strip()
     ]
-    if not human_exempt:
+    # Filter to users that actually exist on this system
+    valid_exempt = []
+    for u in human_exempt:
+        try:
+            import pwd
+            pwd.getpwnam(u)
+            valid_exempt.append(u)
+        except Exception:
+            pass
+
+    if not valid_exempt:
         # Fallback to current sudo or login user
         current_login = os.environ.get("SUDO_USER") or os.environ.get("USER") or "atul"
         display_exempt = [current_login]
     else:
-        display_exempt = human_exempt
+        display_exempt = valid_exempt
 
     # Suppress desktop window-switching keybindings during lockout
     import atexit
@@ -370,14 +387,63 @@ def run_lockout_screen(
     entry:focus {
         border-color: #38bdf8;
     }
+    combobox {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        outline: none;
+        padding: 0;
+        margin: 0;
+    }
+    combobox * {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        outline: none;
+        padding: 0;
+        margin: 0;
+    }
+    combobox button.combo,
     combobox button {
         background-color: #ffffff;
         color: #0f172a;
         border: 2px solid #94a3b8;
         border-radius: 8px;
-        padding: 6px 12px;
+        padding: 8px 12px;
         font-size: 14px;
         font-weight: 500;
+        box-shadow: none;
+        outline: none;
+    }
+    combobox button:hover,
+    combobox button.combo:hover {
+        border-color: #38bdf8;
+        background-color: #f8fafc;
+    }
+    combobox cellview {
+        background: transparent;
+        color: #0f172a;
+    }
+    combobox arrow {
+        color: #0f172a;
+        min-height: 14px;
+        min-width: 14px;
+        padding-left: 6px;
+    }
+    menu,
+    menuitem,
+    menuitem label {
+        background-color: #ffffff;
+        color: #0f172a;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    menuitem:hover,
+    menuitem:selected,
+    menuitem:hover label,
+    menuitem:selected label {
+        background-color: #38bdf8;
+        color: #ffffff;
     }
     .btn-unlock {
         background: #10b981;
@@ -441,7 +507,7 @@ def run_lockout_screen(
     Gtk.StyleContext.add_provider_for_screen(
         Gdk.Screen.get_default(),
         css_provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        Gtk.STYLE_PROVIDER_PRIORITY_USER,
     )
 
     # Root Box centering the card on the fullscreen dark backdrop
@@ -481,115 +547,97 @@ def run_lockout_screen(
         info_label.get_style_context().add_class("session-info")
         card.pack_start(info_label, False, False, 0)
 
-    # 3. Work Safety Assurance (Child's commands are protected)
-    safety_label = Gtk.Label(
-        label="🛡️ Background tasks, compiles, and downloads are running safely."
-    )
-    safety_label.get_style_context().add_class("safety-label")
-    card.pack_start(safety_label, False, False, 4)
+    # 3. Work Safety Assurance & 5-Minute Save Work Extension
+    # Only available when an active working session has ended/expired (NOT for a new login outside hours)
+    if not is_login_denial:
+        safety_label = Gtk.Label(
+            label="🛡️ Background tasks, compiles, and downloads are running safely."
+        )
+        safety_label.get_style_context().add_class("safety-label")
+        card.pack_start(safety_label, False, False, 4)
 
-    # 4. 1-Time 5-Minute Extension (Save Work) Box
-    already_used_5m = False
-    try:
-        from parentalcontrol.ipc import send_ipc_request
-        ext_resp = send_ipc_request({
-            "action": "check_5m_extension_status",
-            "child_user": child_user,
-        })
-        already_used_5m = ext_resp.get("already_used", False)
-    except Exception:
-        try:
-            from parentalcontrol.override_manager import has_used_5m_extension_today
-            already_used_5m = has_used_5m_extension_today(child_user)
-        except Exception:
-            already_used_5m = False
-
-    work_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-    work_box.get_style_context().add_class("override-box")
-
-    work_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    work_title = Gtk.Label(label="💾 Need to Save Your Work?")
-    work_title.get_style_context().add_class("section-title")
-    work_title.set_halign(Gtk.Align.START)
-    work_header.pack_start(work_title, True, True, 0)
-    work_box.pack_start(work_header, False, False, 0)
-
-    work_desc = Gtk.Label(
-        label="Get a 1-time 5-minute extension to save your open documents, code, or games before signing out."
-    )
-    work_desc.get_style_context().add_class("subtitle-label")
-    work_desc.set_line_wrap(True)
-    work_desc.set_halign(Gtk.Align.START)
-    work_box.pack_start(work_desc, False, False, 0)
-
-    work_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    work_action_box.set_halign(Gtk.Align.CENTER)
-
-    btn_extend_5m = Gtk.Button()
-    if already_used_5m:
-        btn_extend_5m.set_label("⏳ 5 Min Extension (Already Used Today)")
-        btn_extend_5m.set_sensitive(False)
-    else:
-        btn_extend_5m.set_label("⏳ Extend 5 Minutes to Save Work")
-        btn_extend_5m.get_style_context().add_class("btn-save-work")
-
-    work_status_label = Gtk.Label(label="")
-    work_status_label.set_line_wrap(True)
-    if already_used_5m:
-        work_status_label.set_text("⚠️ Your 1-time 5-minute extension for today has already been used.")
-        work_status_label.get_style_context().add_class("status-error")
-
-    def do_extend_5m(*args):
-        btn_extend_5m.set_sensitive(False)
-        work_status_label.set_text("Granting 5-minute extension...")
-
-        success = False
-        err_msg = "Could not grant extension."
-
+        already_used_5m = False
         try:
             from parentalcontrol.ipc import send_ipc_request
-            resp = send_ipc_request({
-                "action": "request_5m_extension",
+            ext_resp = send_ipc_request({
+                "action": "check_5m_extension_status",
                 "child_user": child_user,
-                "session_id": session_id,
             })
-            if resp.get("success"):
-                success = True
-            else:
-                err_msg = resp.get("error", "Extension request denied.")
+            already_used_5m = ext_resp.get("already_used", False)
         except Exception:
             try:
-                from parentalcontrol.override_manager import grant_5m_work_extension
-                grant_5m_work_extension(child_user)
-                success = True
-            except Exception as e:
-                err_msg = str(e)
-
-        if success:
-            work_status_label.set_text("✅ 5-minute extension granted! Save all your work now. Screen locks in 5 minutes.")
-            work_status_label.get_style_context().remove_class("status-error")
-            work_status_label.get_style_context().add_class("status-success")
-            btn_extend_5m.set_label("⏳ 5-Minute Extension Active")
-
-            try:
-                from parentalcontrol.notifier import play_alert_sound
-                play_alert_sound("complete")
+                from parentalcontrol.override_manager import has_used_5m_extension_today
+                already_used_5m = has_used_5m_extension_today(child_user)
             except Exception:
-                pass
+                already_used_5m = False
 
-            exit_code[0] = EXIT_UNLOCKED
-            ungrab_devices()
-            GLib.timeout_add(1000, Gtk.main_quit)
+        work_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        work_box.get_style_context().add_class("override-box")
+
+        work_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        work_title = Gtk.Label(label="💾 Need to Save Your Work?")
+        work_title.get_style_context().add_class("section-title")
+        work_title.set_halign(Gtk.Align.START)
+        work_header.pack_start(work_title, True, True, 0)
+        work_box.pack_start(work_header, False, False, 0)
+
+        work_desc = Gtk.Label(
+            label="Get a 1-time 5-minute extension to save your open documents, code, or games before signing out."
+        )
+        work_desc.get_style_context().add_class("subtitle-label")
+        work_desc.set_line_wrap(True)
+        work_desc.set_halign(Gtk.Align.START)
+        work_box.pack_start(work_desc, False, False, 0)
+
+        work_action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        work_action_box.set_halign(Gtk.Align.CENTER)
+
+        btn_extend_5m = Gtk.Button()
+        if already_used_5m:
+            btn_extend_5m.set_label("⏳ 5 Min Extension (Already Used Today)")
+            btn_extend_5m.set_sensitive(False)
         else:
-            work_status_label.set_text(f"❌ {err_msg}")
-            work_status_label.get_style_context().remove_class("status-success")
+            btn_extend_5m.set_label("⏳ Extend 5 Minutes to Save Work")
+            btn_extend_5m.get_style_context().add_class("btn-save-work")
+
+        work_status_label = Gtk.Label(label="")
+        work_status_label.set_line_wrap(True)
+        if already_used_5m:
+            work_status_label.set_text("⚠️ Your 1-time 5-minute extension for today has already been used.")
             work_status_label.get_style_context().add_class("status-error")
 
-    btn_extend_5m.connect("clicked", do_extend_5m)
-    work_action_box.pack_start(btn_extend_5m, False, False, 0)
-    work_box.pack_start(work_action_box, False, False, 4)
-    work_box.pack_start(work_status_label, False, False, 0)
-    card.pack_start(work_box, False, False, 0)
+        def do_extend_5m(*args):
+            btn_extend_5m.set_sensitive(False)
+            work_status_label.set_text("Granting 5-minute extension...")
+
+            success = False
+            err_msg = "Could not grant extension."
+
+            try:
+                from parentalcontrol.ipc import send_ipc_request
+                resp = send_ipc_request({
+                    "action": "request_5m_extension",
+                    "child_user": child_user,
+                    "session_id": session_id,
+                    "is_login_denial": is_login_denial,
+                })
+                if resp.get("success"):
+                    success = True
+                else:
+                    err_msg = resp.get("error", "Extension request denied.")
+            except Exception:
+                try:
+                    from parentalcontrol.override_manager import grant_5m_work_extension
+                    grant_5m_work_extension(child_user)
+                    success = True
+                except Exception as e:
+                    err_msg = str(e)
+
+        btn_extend_5m.connect("clicked", do_extend_5m)
+        work_action_box.pack_start(btn_extend_5m, False, False, 0)
+        work_box.pack_start(work_action_box, False, False, 4)
+        work_box.pack_start(work_status_label, False, False, 0)
+        card.pack_start(work_box, False, False, 0)
 
     # 5. Parent Override Box
     override_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
@@ -842,12 +890,11 @@ def _run_cli_fallback(
     next_session_info: Optional[str],
 ) -> int:
     """Terminal fallback for environments without graphical desktop."""
-    print("\n" + "=" * 60)
-    print("⏰ PARENTAL CONTROL - SCREEN TIME RESTRICTED")
-    print(reason)
+    sys.stderr.write("\n" + "=" * 60 + "\n")
+    sys.stderr.write("⏰ PARENTAL CONTROL - SCREEN TIME RESTRICTED\n")
+    sys.stderr.write(f"{reason}\n")
     if next_session_info:
-        print(f"Next session: {next_session_info}")
-    print("=" * 60)
-    print("Signing out in 10 seconds...\n")
-    time.sleep(10)
-    return EXIT_LOGOUT
+        sys.stderr.write(f"Next session: {next_session_info}\n")
+    sys.stderr.write("=" * 60 + "\n\n")
+    sys.stderr.flush()
+    return EXIT_ERROR

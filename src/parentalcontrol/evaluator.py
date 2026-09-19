@@ -86,6 +86,33 @@ def is_specific_device(rule_device: str) -> bool:
     return raw not in ("*", "all", "any", "default")
 
 
+def normalize_username(name: str) -> str:
+    """Normalize username for robust comparison (lowercase, stripped, collapsed consecutive duplicate letters)."""
+    clean = re.sub(r"[^a-zA-Z0-9_\-\.]", "", str(name).lower().strip())
+    # Collapse consecutive identical letters, e.g. himanshii -> himanshi, himanshuu -> himanshu
+    return re.sub(r"(.)\1+", r"\1", clean)
+
+
+def matches_user(rule_user: str, target_user: str) -> bool:
+    """Check if target_user matches rule_user with typo tolerance for repeated letters."""
+    if not rule_user or not str(rule_user).strip():
+        return True
+    ru = str(rule_user).strip().lower()
+    tu = str(target_user).strip().lower()
+    if ru in ("*", "all", "any"):
+        return True
+    if ru == tu:
+        return True
+    tokens = [t.strip().lower() for t in re.split(r"[,;/]+", ru) if t.strip()]
+    if tu in tokens or "*" in tokens or "all" in tokens:
+        return True
+    tu_norm = normalize_username(tu)
+    for token in tokens:
+        if token == tu or normalize_username(token) == tu_norm:
+            return True
+    return False
+
+
 def is_specific_user(rule_user: str) -> bool:
     """Check if rule defines a specific user rather than a wildcard."""
     if not rule_user or not str(rule_user).strip():
@@ -146,9 +173,9 @@ def evaluate_access(
 
     # 3. Prioritize rules by specificity:
     # Tier 1: Specific User AND Specific Device
-    tier1 = [r for r in today_candidates if r.user == target_user and is_specific_device(r.device)]
+    tier1 = [r for r in today_candidates if matches_user(r.user, target_user) and is_specific_user(r.user) and is_specific_device(r.device)]
     # Tier 2: Specific User AND Wildcard Device
-    tier2 = [r for r in today_candidates if r.user == target_user and not is_specific_device(r.device)]
+    tier2 = [r for r in today_candidates if matches_user(r.user, target_user) and is_specific_user(r.user) and not is_specific_device(r.device)]
     # Tier 3: Wildcard User AND Specific Device
     tier3 = [r for r in today_candidates if not is_specific_user(r.user) and is_specific_device(r.device)]
     # Tier 4: Wildcard User AND Wildcard Device

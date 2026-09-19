@@ -91,6 +91,11 @@ def _get_session_details(session_id: str, uid: int, username: str, seat: str) ->
         sess_type = props.get("Type", "unknown")
         state = props.get("State", "unknown")
         user = props.get("Name", username)
+        sess_class = props.get("Class", "user")
+
+        # Only interactive user sessions, not systemd managers or background sessions
+        if sess_class != "user" or sess_type in ("unspecified", "background"):
+            return None
 
         return UserSession(
             session_id=session_id,
@@ -120,58 +125,103 @@ def _get_user_env(uid: int, username: str) -> Dict[str, str]:
     env["USER"] = username
     env["HOME"] = f"/home/{username}"
 
-    # Wayland display detection (check wayland-0, wayland-1, etc.)
-    for i in range(4):
-        w_sock = runtime_dir / f"wayland-{i}"
-        if w_sock.exists():
-            env["WAYLAND_DISPLAY"] = f"wayland-{i}"
-            break
+    # Query systemd user environment directly for exact display variables if available
+    try:
+        res = subprocess.run(
+            ["systemctl", f"--machine={username}@.host", "--user", "show-environment"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip("'\"")
+                    if k in (
+                        "WAYLAND_DISPLAY",
+                        "DISPLAY",
+                        "XAUTHORITY",
+                        "DBUS_SESSION_BUS_ADDRESS",
+                        "XDG_RUNTIME_DIR",
+                        "XDG_CURRENT_DESKTOP",
+                        "DESKTOP_SESSION",
+                    ):
+                        env[k] = v
+    except Exception as e:
+        logger.debug(f"Could not query user environment via systemctl: {e}")
 
-    # X11 display detection
-    if not env.get("DISPLAY"):
+    # Fallbacks:
+    # Wayland display detection (check wayland-0, wayland-1, etc.)
+    if "WAYLAND_DISPLAY" not in env:
+        for i in range(4):
+            w_sock = runtime_dir / f"wayland-{i}"
+            if w_sock.exists():
+                env["WAYLAND_DISPLAY"] = f"wayland-{i}"
+                break
+
+    # Xauthority detection for X11/Xwayland
+    if "XAUTHORITY" not in env:
+        user_home_xauth = Path(f"/home/{username}/.Xauthority")
+        if user_home_xauth.exists():
+            env["XAUTHORITY"] = str(user_home_xauth)
+        elif runtime_dir.exists():
+            for f in runtime_dir.glob(".mutter-Xwaylandauth.*"):
+                env["XAUTHORITY"] = str(f)
+                break
+            if "XAUTHORITY" not in env:
+                run_xauth = runtime_dir / "Xauthority"
+                if run_xauth.exists():
+                    env["XAUTHORITY"] = str(run_xauth)
+
+    # X11 display detection: only if valid X socket exists matching DISPLAY or owned by user
+    if "DISPLAY" not in env and "WAYLAND_DISPLAY" not in env:
         for i in range(4):
             x_sock = Path(f"/tmp/.X11-unix/X{i}")
             if x_sock.exists():
-                env["DISPLAY"] = f":{i}"
-                break
-        if not env.get("DISPLAY"):
-            env["DISPLAY"] = ":0"
-
-    # Xauthority detection for X11/Xwayland
-    user_home_xauth = Path(f"/home/{username}/.Xauthority")
-    if user_home_xauth.exists():
-        env["XAUTHORITY"] = str(user_home_xauth)
-    elif runtime_dir.exists():
-        for f in runtime_dir.glob(".mutter-Xwaylandauth.*"):
-            env["XAUTHORITY"] = str(f)
-            break
-        if "XAUTHORITY" not in env:
-            run_xauth = runtime_dir / "Xauthority"
-            if run_xauth.exists():
-                env["XAUTHORITY"] = str(run_xauth)
+                try:
+                    stat = x_sock.stat()
+                    if stat.st_uid in (uid, 0):
+                        env["DISPLAY"] = f":{i}"
+                        break
+                except Exception:
+                    pass
 
     return env
 
 
-def wait_for_user_display(uid: int, username: str, timeout_seconds: float = 8.0) -> Dict[str, str]:
+def wait_for_user_display(uid: int, username: str, timeout_seconds: float = 35.0) -> Dict[str, str]:
     """Wait for a user's GUI display server (Wayland socket or X11) to be ready."""
     deadline = time.time() + max(1.0, timeout_seconds)
     runtime_dir = Path(f"/run/user/{uid}")
 
     while time.time() < deadline:
-        # Check if Wayland socket exists
+        env = _get_user_env(uid, username)
+
+        # Check Wayland socket
+        w_disp = env.get("WAYLAND_DISPLAY")
+        if w_disp and (runtime_dir / w_disp).exists():
+            logger.info(f"User GUI display ready: WAYLAND_DISPLAY={w_disp} found for '{username}'.")
+            return env
+
+        # Check X11 socket
+        disp = env.get("DISPLAY")
+        if disp:
+            disp_num = disp.split(":")[-1].split(".")[0]
+            if Path(f"/tmp/.X11-unix/X{disp_num}").exists():
+                logger.info(f"User GUI display ready: DISPLAY={disp} found for '{username}'.")
+                return env
+
+        # Check if wayland-0 exists directly in runtime_dir even if env didn't pick it up yet
         for i in range(4):
             if (runtime_dir / f"wayland-{i}").exists():
-                logger.debug(f"User display ready: wayland-{i} found for '{username}'.")
-                return _get_user_env(uid, username)
+                env["WAYLAND_DISPLAY"] = f"wayland-{i}"
+                logger.info(f"User GUI display ready: wayland-{i} socket found for '{username}'.")
+                return env
 
-        # Check if X11 socket exists
-        for i in range(4):
-            if Path(f"/tmp/.X11-unix/X{i}").exists():
-                logger.debug(f"User display ready: X{i} found for '{username}'.")
-                return _get_user_env(uid, username)
-
-        time.sleep(0.3)
+        time.sleep(0.5)
 
     logger.warning(f"Display wait timed out after {timeout_seconds}s for user '{username}'. Using best-effort env.")
     return _get_user_env(uid, username)
@@ -200,12 +250,15 @@ def run_in_user_session(
             "env",
             f"XDG_RUNTIME_DIR={user_env['XDG_RUNTIME_DIR']}",
             f"DBUS_SESSION_BUS_ADDRESS={user_env['DBUS_SESSION_BUS_ADDRESS']}",
-            f"DISPLAY={user_env.get('DISPLAY', ':0')}",
         ]
         if "WAYLAND_DISPLAY" in user_env:
             full_cmd.append(f"WAYLAND_DISPLAY={user_env['WAYLAND_DISPLAY']}")
+        if "DISPLAY" in user_env:
+            full_cmd.append(f"DISPLAY={user_env['DISPLAY']}")
         if "XAUTHORITY" in user_env:
             full_cmd.append(f"XAUTHORITY={user_env['XAUTHORITY']}")
+        if "XDG_CURRENT_DESKTOP" in user_env:
+            full_cmd.append(f"XDG_CURRENT_DESKTOP={user_env['XDG_CURRENT_DESKTOP']}")
         full_cmd.extend(command)
     else:
         full_cmd = command

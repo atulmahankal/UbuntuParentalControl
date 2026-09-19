@@ -199,6 +199,9 @@ class SystemParentalControlDaemon:
             if self.config.warnings.show_notifications and eval_res.active_slot:
                 end_str = eval_res.active_slot.end_time.strftime("%I:%M %p").lstrip("0")
                 rem_mins = int(eval_res.remaining_minutes)
+                if session.session_type in ("wayland", "x11"):
+                    from parentalcontrol.system_service import wait_for_user_display
+                    wait_for_user_display(uid, username, timeout_seconds=20.0)
                 send_user_notification(
                     uid=uid,
                     username=username,
@@ -295,6 +298,20 @@ class SystemParentalControlDaemon:
         now_str = result.current_time.strftime("%I:%M %p").lstrip("0")
         allowed_str = ", ".join(s.formatted_range() for s in result.allowed_slots_today) if result.allowed_slots_today else "No hours scheduled today"
 
+        next_str = ""
+        if result.next_slot:
+            next_start = result.next_slot.start_time.strftime("%I:%M %p").lstrip("0")
+            next_end = result.next_slot.end_time.strftime("%I:%M %p").lstrip("0")
+            next_str = f"Next allowed session today: {next_start} - {next_end}"
+        else:
+            next_str = f"Allowed schedule today: {allowed_str}"
+
+        # Wait for GUI display server to be ready before firing notifications, sounds, and GUI
+        if session.session_type in ("wayland", "x11"):
+            logger.info(f"Waiting for GUI display server before enforcing login denial for '{session.username}'...")
+            from parentalcontrol.system_service import wait_for_user_display
+            wait_for_user_display(session.uid, session.username, timeout_seconds=35.0)
+
         if self.config.warnings.play_sound:
             play_user_sound(session.uid, session.username, "dialog-warning")
 
@@ -303,18 +320,10 @@ class SystemParentalControlDaemon:
                 uid=session.uid,
                 username=session.username,
                 title="Access Restricted",
-                message=f"Screen time not allowed right now. Allowed today: {allowed_str}",
+                message=f"Screen time not allowed right now. {next_str}",
                 urgency="critical",
                 icon="dialog-error",
             )
-
-        next_str = ""
-        if result.next_slot:
-            next_start = result.next_slot.start_time.strftime("%I:%M %p").lstrip("0")
-            next_end = result.next_slot.end_time.strftime("%I:%M %p").lstrip("0")
-            next_str = f"Next allowed session today: {next_start} - {next_end}"
-        else:
-            next_str = f"Allowed schedule today: {allowed_str}"
 
         self._enforce_lockout_overlay(
             session=session,
@@ -411,20 +420,25 @@ class SystemParentalControlDaemon:
         # Check if parent override or 5m work extension was granted during lockout
         active_override = get_active_override(session.username)
         if active_override and active_override.get("expires_at", 0) > time.time():
-            logger.info(f"Override verified for '{session.username}'! Session preserved safely.")
-            if session.session_id not in self.active_monitored:
-                self.active_monitored[session.session_id] = MonitoredSession(
-                    session_id=session.session_id,
-                    username=session.username,
-                    uid=session.uid,
-                    login_time=datetime.now(),
-                    initial_check_passed=True,
-                )
-            return
+            granted_by = active_override.get("granted_by", "")
+            if is_login_denial and "Save Work" in granted_by:
+                logger.warning(f"Rejecting self-service extension for '{session.username}' during login denial.")
+            else:
+                logger.info(f"Override verified for '{session.username}' (by {granted_by})! Session preserved safely.")
+                if session.session_id not in self.active_monitored:
+                    self.active_monitored[session.session_id] = MonitoredSession(
+                        session_id=session.session_id,
+                        username=session.username,
+                        uid=session.uid,
+                        login_time=datetime.now(),
+                        initial_check_passed=True,
+                    )
+                return
 
-        # If the GUI exited abnormally fast (< 3.0s) and was not unlocked, show countdown dialog so user sees reason
-        if ret_code != 0 and elapsed < 3.0:
-            logger.warning(f"Lockout overlay closed unexpectedly ({elapsed:.1f}s). Presenting fallback warning dialog.")
+        # If the GUI exited with error or closed unexpectedly, show countdown dialog so user sees reason
+        from parentalcontrol.lockout_gui import EXIT_ERROR, EXIT_UNLOCKED
+        if ret_code == EXIT_ERROR or (ret_code != EXIT_UNLOCKED and elapsed < 5.0):
+            logger.warning(f"Lockout overlay closed or failed ({elapsed:.1f}s, code {ret_code}). Presenting fallback warning dialog.")
             show_user_countdown_dialog(
                 uid=session.uid,
                 username=session.username,

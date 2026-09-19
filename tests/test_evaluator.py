@@ -216,3 +216,47 @@ def test_evaluate_access_with_active_override(monkeypatch):
     assert res.is_allowed is True
     assert "Temporary access granted by atul" in res.reason
     assert res.remaining_minutes == 20.0
+
+
+def test_normalize_and_matches_user():
+    from parentalcontrol.evaluator import normalize_username, matches_user
+
+    assert normalize_username("himanshii") == "himanshi"
+    assert normalize_username("himanshuu") == "himanshu"
+    assert normalize_username("alexx") == "alex"
+    assert normalize_username("atul") == "atul"
+
+    assert matches_user("himanshii", "himanshi") is True
+    assert matches_user("himanshuu", "himanshu") is True
+    assert matches_user("himanshi", "himanshii") is True
+    assert matches_user("*", "himanshi") is True
+    assert matches_user("himanshuu, himanshii", "himanshi") is True
+    assert matches_user("atul", "himanshi") is False
+
+
+def test_evaluate_access_with_typo_in_sheet_user():
+    # In Google Sheet, parent entered "himanshii" (two i's)
+    rules = [
+        ScheduleRule(
+            user="himanshii",
+            day="All",
+            start_time=time(15, 0),
+            end_time=time(18, 0),
+            allowed=True,
+            message="Afternoon time",
+        )
+    ]
+    # At 16:00 (4:00 PM), system user "himanshi" (one i) should match and be allowed
+    check_dt = datetime(2026, 9, 1, 16, 0)
+    res = evaluate_access("himanshi", rules, check_dt=check_dt)
+    assert res.is_allowed is True
+    assert res.active_slot is not None
+    assert res.remaining_minutes == 120.0
+
+    # At 14:00 (2:00 PM), outside schedule -> next slot is 15:00 - 18:00
+    check_dt_early = datetime(2026, 9, 1, 14, 0)
+    res_early = evaluate_access("himanshi", rules, check_dt=check_dt_early)
+    assert res_early.is_allowed is False
+    assert res_early.next_slot is not None
+    assert res_early.next_slot.start_time == time(15, 0)
+    assert res_early.next_slot.end_time == time(18, 0)

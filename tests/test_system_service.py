@@ -211,3 +211,45 @@ def test_handle_login_denial_passes_flag():
         assert kwargs["is_login_denial"] is True
         assert "Login is not permitted" in kwargs["reason"]
 
+
+def test_manager_sessions_skipped_in_list_active_sessions():
+    from parentalcontrol.system_service import list_active_sessions
+
+    fake_list = (
+        "3 1002 himanshi seat0\n"
+        "4 1002 himanshi -\n"
+    )
+    with patch("shutil.which", return_value="/bin/loginctl"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(stdout=fake_list, returncode=0),
+            # Session 3 is real user Wayland desktop
+            MagicMock(stdout="Type=wayland\nState=active\nName=himanshi\nClass=user\nSeat=seat0\n", returncode=0),
+            # Session 4 is systemd background user manager
+            MagicMock(stdout="Type=unspecified\nState=active\nName=himanshi\nClass=manager\n", returncode=0),
+        ]
+        sessions = list_active_sessions()
+        # Session 4 (Class=manager) must be skipped! Only session 3 (Class=user) returned!
+        assert len(sessions) == 1
+        assert sessions[0].session_id == "3"
+        assert sessions[0].session_type == "wayland"
+
+
+def test_wait_for_user_display_discovers_wayland_socket(tmp_path, monkeypatch):
+    from parentalcontrol.system_service import wait_for_user_display
+
+    run_dir = tmp_path / "run_user_1002"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "wayland-0").touch()
+
+    monkeypatch.setattr(
+        "parentalcontrol.system_service.Path",
+        lambda p: run_dir if "/run/user/1002" in str(p) else Path(p),
+    )
+    with patch("subprocess.run") as mock_sub:
+        mock_sub.return_value = MagicMock(returncode=1)  # simulate systemctl not ready yet
+        env = wait_for_user_display(1002, "himanshi", timeout_seconds=1.0)
+        assert env["USER"] == "himanshi"
+        assert env.get("WAYLAND_DISPLAY") == "wayland-0"
+
+
