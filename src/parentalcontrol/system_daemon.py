@@ -174,6 +174,7 @@ class SystemParentalControlDaemon:
             rules=self.cached_rules,
             check_dt=now,
             device=self.config.effective_device_name,
+            exact_username_matching=self.config.rules.exact_username_matching,
         )
 
 

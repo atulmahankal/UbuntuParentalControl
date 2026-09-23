@@ -270,6 +270,12 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
         print(f"❌ Error fetching schedule: {e}")
         sys.exit(1)
 
+    exact_matching = config.rules.exact_username_matching
+    if getattr(args, "exact_matching", None) is True:
+        exact_matching = True
+    elif getattr(args, "fuzzy_matching", None) is True:
+        exact_matching = False
+
     result = evaluate_access(
         user=user,
         rules=rules,
@@ -277,6 +283,7 @@ def cmd_check(args: argparse.Namespace, config: AppConfig) -> None:
         device=device,
         is_cached=is_cached,
         cache_age_seconds=age,
+        exact_username_matching=exact_matching,
     )
 
     if is_pam:
@@ -313,10 +320,17 @@ def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
     url = args.url or config.google_sheet.url
     device = getattr(args, "device", None) or config.effective_device_name
 
+    exact_matching = config.rules.exact_username_matching
+    if getattr(args, "exact_matching", None) is True:
+        exact_matching = True
+    elif getattr(args, "fuzzy_matching", None) is True:
+        exact_matching = False
+
     print(f"\n================ PARENTAL CONTROL STATUS ================")
     print(f"Current User:        {user}")
     print(f"Current Device:      {device}")
     print(f"Is Targeted:         {'Yes' if config.is_user_targeted(user) else 'No (Exempt)'}")
+    print(f"Username Matching:   {'Exact (Strict)' if exact_matching else 'Fuzzy (Typo-tolerant)'}")
     print(f"Google Sheet Source: {url or config.google_sheet.service_account_path or '(Not configured)'}")
     print(f"Current Date/Time:   {datetime.now().strftime('%A, %Y-%m-%d %I:%M:%S %p')}")
     print(f"=========================================================\n")
@@ -345,6 +359,7 @@ def cmd_status(args: argparse.Namespace, config: AppConfig) -> None:
         device=device,
         is_cached=is_cached,
         cache_age_seconds=age,
+        exact_username_matching=exact_matching,
     )
 
     status_str = "🟢 ALLOWED" if result.is_allowed else "🔴 BLOCKED"
@@ -646,6 +661,8 @@ def main() -> None:
     p_status.add_argument("--user", help="Username to check")
     p_status.add_argument("--device", help="Device name/hostname to check against")
     p_status.add_argument("--url", help="Override Google Sheet URL")
+    p_status.add_argument("--exact-matching", action="store_true", default=None, help="Require exact username match (overrides config)")
+    p_status.add_argument("--fuzzy-matching", action="store_true", default=None, help="Allow repeated-letter typo tolerance in username (overrides config)")
 
     # Command: check
     p_check = subparsers.add_parser("check", parents=[config_parent_parser], help="Check login permission for a user")
@@ -654,6 +671,8 @@ def main() -> None:
     p_check.add_argument("--url", help="Override Google Sheet URL")
     p_check.add_argument("--dry-run", action="store_true", help="Dry-run test check")
     p_check.add_argument("--pam", action="store_true", help="Format output for PAM authentication module")
+    p_check.add_argument("--exact-matching", action="store_true", default=None, help="Require exact username match (overrides config)")
+    p_check.add_argument("--fuzzy-matching", action="store_true", default=None, help="Allow repeated-letter typo tolerance in username (overrides config)")
 
     # Command: test-sheet
     p_test = subparsers.add_parser("test-sheet", parents=[config_parent_parser], help="Test fetching and parsing Google Sheet")

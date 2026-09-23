@@ -48,6 +48,7 @@ class RulesConfig:
     exempt_users: List[str] = field(default_factory=lambda: ["root", "admin", "parent", "gdm", "lightdm", "sddm"])
     offline_policy: str = "allow_cached"  # "allow_cached", "block", "grace_period"
     offline_grace_minutes: int = 15
+    exact_username_matching: bool = True
 
 
 @dataclass
@@ -158,6 +159,14 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         warn_data = data.get("warnings", {})
         enf_data = data.get("enforcement", {})
 
+        exact_user_val = rules_data.get("exact_username_matching", rules_data.get("exact_user_matching", True))
+        if isinstance(exact_user_val, str):
+            exact_user_matching = exact_user_val.strip().lower() in ("true", "yes", "1", "y", "enable", "enabled", "on")
+        elif isinstance(exact_user_val, bool):
+            exact_user_matching = exact_user_val
+        else:
+            exact_user_matching = bool(exact_user_val)
+
         cfg = AppConfig(
             google_sheet=GoogleSheetConfig(
                 url=gs_data.get("url", ""),
@@ -170,6 +179,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
                 exempt_users=rules_data.get("exempt_users", ["root", "admin", "parent"]),
                 offline_policy=rules_data.get("offline_policy", "allow_cached"),
                 offline_grace_minutes=rules_data.get("offline_grace_minutes", 15),
+                exact_username_matching=exact_user_matching,
             ),
             warnings=WarningsConfig(
                 intervals_minutes=warn_data.get("intervals_minutes", [30, 20, 10, 5, 2]),
@@ -212,6 +222,7 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> Path:
             "exempt_users": config.rules.exempt_users,
             "offline_policy": config.rules.offline_policy,
             "offline_grace_minutes": config.rules.offline_grace_minutes,
+            "exact_username_matching": config.rules.exact_username_matching,
         },
         "warnings": {
             "intervals_minutes": config.warnings.intervals_minutes,

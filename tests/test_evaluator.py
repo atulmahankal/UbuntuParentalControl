@@ -226,12 +226,18 @@ def test_normalize_and_matches_user():
     assert normalize_username("alexx") == "alex"
     assert normalize_username("atul") == "atul"
 
-    assert matches_user("himanshii", "himanshi") is True
-    assert matches_user("himanshuu", "himanshu") is True
-    assert matches_user("himanshi", "himanshii") is True
+    # Default: exact matching
+    assert matches_user("himanshii", "himanshi") is False
+    assert matches_user("himanshuu", "himanshu") is False
+    assert matches_user("himanshu, himanshi", "himanshi") is True
     assert matches_user("*", "himanshi") is True
-    assert matches_user("himanshuu, himanshii", "himanshi") is True
     assert matches_user("atul", "himanshi") is False
+
+    # Configured with exact_matching=False (fuzzy/tolerant)
+    assert matches_user("himanshii", "himanshi", exact_matching=False) is True
+    assert matches_user("himanshuu", "himanshu", exact_matching=False) is True
+    assert matches_user("himanshi", "himanshii", exact_matching=False) is True
+    assert matches_user("himanshuu, himanshii", "himanshi", exact_matching=False) is True
 
 
 def test_evaluate_access_with_typo_in_sheet_user():
@@ -246,16 +252,21 @@ def test_evaluate_access_with_typo_in_sheet_user():
             message="Afternoon time",
         )
     ]
-    # At 16:00 (4:00 PM), system user "himanshi" (one i) should match and be allowed
     check_dt = datetime(2026, 9, 1, 16, 0)
-    res = evaluate_access("himanshi", rules, check_dt=check_dt)
-    assert res.is_allowed is True
-    assert res.active_slot is not None
-    assert res.remaining_minutes == 120.0
+
+    # 1. By default, exact matching is required -> himanshi does NOT match himanshii -> denied
+    res_default = evaluate_access("himanshi", rules, check_dt=check_dt)
+    assert res_default.is_allowed is False
+
+    # 2. When exact_username_matching is False, typo tolerance matches himanshi -> allowed
+    res_fuzzy = evaluate_access("himanshi", rules, check_dt=check_dt, exact_username_matching=False)
+    assert res_fuzzy.is_allowed is True
+    assert res_fuzzy.active_slot is not None
+    assert res_fuzzy.remaining_minutes == 120.0
 
     # At 14:00 (2:00 PM), outside schedule -> next slot is 15:00 - 18:00
     check_dt_early = datetime(2026, 9, 1, 14, 0)
-    res_early = evaluate_access("himanshi", rules, check_dt=check_dt_early)
+    res_early = evaluate_access("himanshi", rules, check_dt=check_dt_early, exact_username_matching=False)
     assert res_early.is_allowed is False
     assert res_early.next_slot is not None
     assert res_early.next_slot.start_time == time(15, 0)

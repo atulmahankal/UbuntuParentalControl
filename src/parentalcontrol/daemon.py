@@ -99,6 +99,7 @@ def check_and_enforce_login(
         check_dt=datetime.now(),
         is_cached=is_cached,
         cache_age_seconds=cache_age,
+        exact_username_matching=config.rules.exact_username_matching,
     )
 
     if not result.is_allowed:
@@ -215,6 +216,8 @@ class ParentalControlMonitor:
                     user=self.user,
                     rules=self.cached_rules,
                     check_dt=now,
+                    device=device_name,
+                    exact_username_matching=self.config.rules.exact_username_matching,
                 )
 
                 if not eval_res.is_allowed:

@@ -93,8 +93,12 @@ def normalize_username(name: str) -> str:
     return re.sub(r"(.)\1+", r"\1", clean)
 
 
-def matches_user(rule_user: str, target_user: str) -> bool:
-    """Check if target_user matches rule_user with typo tolerance for repeated letters."""
+def matches_user(rule_user: str, target_user: str, exact_matching: bool = True) -> bool:
+    """Check if target_user matches rule_user.
+    
+    If exact_matching is True (default), requires exact (case-insensitive) username match or wildcard.
+    If exact_matching is False, applies typo tolerance for repeated letters (e.g. himanshuu -> himanshu).
+    """
     if not rule_user or not str(rule_user).strip():
         return True
     ru = str(rule_user).strip().lower()
@@ -106,10 +110,11 @@ def matches_user(rule_user: str, target_user: str) -> bool:
     tokens = [t.strip().lower() for t in re.split(r"[,;/]+", ru) if t.strip()]
     if tu in tokens or "*" in tokens or "all" in tokens:
         return True
-    tu_norm = normalize_username(tu)
-    for token in tokens:
-        if token == tu or normalize_username(token) == tu_norm:
-            return True
+    if not exact_matching:
+        tu_norm = normalize_username(tu)
+        for token in tokens:
+            if token == tu or normalize_username(token) == tu_norm:
+                return True
     return False
 
 
@@ -128,6 +133,7 @@ def evaluate_access(
     device: Optional[str] = None,
     is_cached: bool = False,
     cache_age_seconds: Optional[float] = None,
+    exact_username_matching: bool = True,
 ) -> AccessResult:
     """Evaluate access permission for user at the given datetime and device."""
     now = check_dt or datetime.now()
@@ -173,9 +179,9 @@ def evaluate_access(
 
     # 3. Prioritize rules by specificity:
     # Tier 1: Specific User AND Specific Device
-    tier1 = [r for r in today_candidates if matches_user(r.user, target_user) and is_specific_user(r.user) and is_specific_device(r.device)]
+    tier1 = [r for r in today_candidates if matches_user(r.user, target_user, exact_matching=exact_username_matching) and is_specific_user(r.user) and is_specific_device(r.device)]
     # Tier 2: Specific User AND Wildcard Device
-    tier2 = [r for r in today_candidates if matches_user(r.user, target_user) and is_specific_user(r.user) and not is_specific_device(r.device)]
+    tier2 = [r for r in today_candidates if matches_user(r.user, target_user, exact_matching=exact_username_matching) and is_specific_user(r.user) and not is_specific_device(r.device)]
     # Tier 3: Wildcard User AND Specific Device
     tier3 = [r for r in today_candidates if not is_specific_user(r.user) and is_specific_device(r.device)]
     # Tier 4: Wildcard User AND Wildcard Device

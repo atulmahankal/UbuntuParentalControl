@@ -16,8 +16,18 @@ def test_config_save_and_load(tmp_path):
     assert loaded.google_sheet.url == "https://docs.google.com/spreadsheets/d/12345/edit"
     assert loaded.rules.target_users == ["child1", "child2"]
     assert loaded.rules.exempt_users == ["atul", "root"]
+    assert loaded.rules.exact_username_matching is True
     assert loaded.is_user_targeted("child1") is True
     assert loaded.is_user_targeted("atul") is False
+
+    # Test loading with exact_username_matching explicitly False
+    cfg_fuzzy = AppConfig(
+        rules=RulesConfig(exact_username_matching=False),
+        config_file_path=cfg_file,
+    )
+    save_config(cfg_fuzzy, cfg_file)
+    loaded_fuzzy = load_config(cfg_file)
+    assert loaded_fuzzy.rules.exact_username_matching is False
 
 def test_user_targeting():
     cfg = AppConfig(
