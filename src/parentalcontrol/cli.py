@@ -972,7 +972,29 @@ def cmd_gsa(args: argparse.Namespace, config: AppConfig) -> None:
         cmd_gsa_status(config)
         return
 
-    key_src = Path(args.file).expanduser().resolve()
+    file_str = str(args.file).strip().strip("'\"")
+    # If run with sudo, resolve ~ to actual user's home instead of /root
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and file_str.startswith("~"):
+        try:
+            import pwd
+            user_home = pwd.getpwnam(sudo_user).pw_dir
+            file_str = os.path.join(user_home, file_str.lstrip("~/"))
+        except Exception:
+            pass
+
+    key_src = Path(file_str).expanduser().resolve()
+    if not key_src.exists() and sudo_user and not Path(file_str).is_absolute():
+        # Fallback check relative to SUDO_USER home
+        try:
+            import pwd
+            user_home = Path(pwd.getpwnam(sudo_user).pw_dir)
+            candidate = (user_home / file_str).resolve()
+            if candidate.exists():
+                key_src = candidate
+        except Exception:
+            pass
+
     if not key_src.exists():
         print(f"\n❌ Error: Service Account file not found at: {key_src}")
         sys.exit(1)
