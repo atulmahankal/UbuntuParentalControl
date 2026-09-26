@@ -858,9 +858,23 @@ def _verify_or_create_spreadsheet(config: AppConfig, client_email: str) -> None:
     if success and sh is not None:
         print(f"✅ Successfully connected to Google Sheet ('{sh.title}') via Service Account!")
 
-        # Check worksheets
+        # Check tabs / worksheets
         existing_tabs = client.get_existing_worksheets(sh)
         print(f"   Existing tabs found: {', '.join(existing_tabs) or 'None'}")
+
+        # Check if Sheet1 exists and Screen Time does not
+        has_sheet1 = any(t.lower() == "sheet1" for t in existing_tabs)
+        has_screen_named = any(t.lower() == client.screen_time_sheet_name.lower() for t in existing_tabs)
+
+        if has_sheet1 and not has_screen_named:
+            if _prompt_yes_no("👉 'Sheet1' found. Would you like to rename 'Sheet1' to 'Screen Time'?", default=True):
+                try:
+                    ws1 = sh.worksheet("Sheet1")
+                    ws1.update_title(client.screen_time_sheet_name)
+                    print(f"   ✅ Renamed tab 'Sheet1' -> '{client.screen_time_sheet_name}'")
+                    existing_tabs = client.get_existing_worksheets(sh)
+                except Exception as e:
+                    print(f"   ⚠️ Could not rename Sheet1: {e}")
 
         missing = []
         for tab in [client.screen_time_sheet_name, client.apps_limit_sheet_name, client.apps_usage_sheet_name]:
@@ -868,12 +882,12 @@ def _verify_or_create_spreadsheet(config: AppConfig, client_email: str) -> None:
                 missing.append(tab)
 
         if missing:
-            print(f"\n⚠️ Missing worksheets: {', '.join(missing)}")
-            if _prompt_yes_no("👉 Would you like to create the missing worksheets automatically with standard headers?", default=True):
+            print(f"\n⚠️ Missing tabs: {', '.join(missing)}")
+            if _prompt_yes_no("👉 Would you like to create the missing tabs automatically with standard headers?", default=True):
                 res = client.ensure_default_worksheets(sh, create_missing=True)
                 for tab_name, created in res.items():
                     if created:
-                        print(f"   ✅ Created worksheet: '{tab_name}'")
+                        print(f"   ✅ Created tab: '{tab_name}'")
         else:
             print("   ✅ All required tabs ('Screen Time', 'Apps Limit', 'Apps Usages') are present!")
         print("\n🚀 Setup complete! Your Parental Control is fully connected to Google Sheets.\n")
