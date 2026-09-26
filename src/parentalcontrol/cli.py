@@ -407,12 +407,16 @@ def cmd_test_sheet(args: argparse.Namespace, config: AppConfig) -> None:
         sheet_url=url,
         service_account_path=config.google_sheet.service_account_path,
         sheet_name=args.sheet or config.google_sheet.sheet_name,
+        screen_time_sheet_name=config.google_sheet.screen_time_sheet_name,
+        apps_limit_sheet_name=config.google_sheet.apps_limit_sheet_name,
+        apps_usage_sheet_name=config.google_sheet.apps_usage_sheet_name,
         cache_path=config.cache_file_path,
+        app_limits_cache_path=config.app_limits_cache_file_path,
     )
 
     try:
         rules, is_cached, age = client.fetch_rules(use_cache_on_failure=False)
-        print(f"✅ Successfully fetched and parsed {len(rules)} schedule rules!\n")
+        print(f"✅ Successfully fetched and parsed {len(rules)} schedule rules from '{client.screen_time_sheet_name}'!\n")
         table = [
             [
                 r.user,
@@ -429,8 +433,32 @@ def cmd_test_sheet(args: argparse.Namespace, config: AppConfig) -> None:
         headers = ["User", "Device", "Day", "Start Time", "End Time", "Allowed", "Max Quota", "Message"]
         print(tabulate(table, headers=headers, tablefmt="fancy_grid"))
     except Exception as e:
-        print(f"❌ Failed to fetch/parse sheet: {e}")
-        sys.exit(1)
+        print(f"❌ Failed to fetch/parse schedule rules: {e}")
+
+    try:
+        app_rules, _, _ = client.fetch_app_rules(use_cache_on_failure=False)
+        if app_rules:
+            print(f"\n✅ Successfully fetched and parsed {len(app_rules)} application rules from '{client.apps_limit_sheet_name}'!\n")
+            app_table = [
+                [
+                    r.user,
+                    r.app_name,
+                    ", ".join(r.patterns),
+                    r.device,
+                    r.day,
+                    "✅ True" if r.allowed else "❌ False",
+                    f"{r.start_time.strftime('%I:%M %p').lstrip('0')} - {r.end_time.strftime('%I:%M %p').lstrip('0')}" if r.start_time and r.end_time else "Anytime",
+                    f"{r.daily_limit_minutes}m" if r.daily_limit_minutes else "-",
+                    r.message or "",
+                ]
+                for r in app_rules
+            ]
+            app_headers = ["User", "App Label", "Patterns / Binaries", "Device", "Day", "Allowed", "Time Window", "Daily Quota", "Message"]
+            print(tabulate(app_table, headers=app_headers, tablefmt="fancy_grid"))
+        else:
+            print(f"\nℹ️ No application rules found in '{client.apps_limit_sheet_name}' tab (or tab not created yet).")
+    except Exception as e:
+        print(f"\n⚠️ Could not fetch application rules from '{client.apps_limit_sheet_name}': {e}")
 
 
 def cmd_create_template(args: argparse.Namespace) -> None:
@@ -609,6 +637,493 @@ def cmd_override(args: argparse.Namespace, config: AppConfig) -> None:
     print(f"   Expires at: {rec.get('expires_at_iso')}\n")
 
 
+def cmd_app_status(args: argparse.Namespace, config: AppConfig) -> None:
+    """Display local application usage tracking data for today."""
+    from parentalcontrol.app_usage_store import AppUsageStore
+    store = AppUsageStore(config.app_usage_file_path)
+    records = store.get_usage_records_for_sync(device=config.effective_device_name)
+
+    target_user = args.user.lower().strip() if getattr(args, "user", None) else None
+    if target_user:
+        records = [r for r in records if r.user.lower() == target_user]
+
+    print("\n================ APPLICATION USAGES (TODAY) ================")
+    print(f"Tracking Date : {store.current_date_str}")
+    print(f"Device        : {config.effective_device_name}")
+    gsa_status = "✅ Configured" if config.google_sheet.service_account_path and os.path.exists(config.google_sheet.service_account_path) else "❌ Not configured (local tracking only)"
+    print(f"GSA Sync      : {gsa_status}\n")
+
+    if not records:
+        print("ℹ️ No application usage recorded yet today for targeted users.\n")
+        return
+
+    table = []
+    for r in records:
+        lim_str = f"{r.daily_limit_minutes}m" if r.daily_limit_minutes else "-"
+        rem_str = f"{r.remaining_minutes}m" if r.remaining_minutes is not None else "-"
+        table.append([
+            r.user,
+            r.app_name,
+            r.binary_or_pattern,
+            f"{r.minutes_used}m",
+            lim_str,
+            rem_str,
+            r.status,
+            r.last_active,
+        ])
+
+    headers = ["User", "App Label", "Binary / Pattern", "Used Today", "Daily Limit", "Remaining", "Status", "Last Active"]
+    print(tabulate(table, headers=headers, tablefmt="fancy_grid"))
+    print("\n💡 Run 'parentalcontrol sync-usage' to immediately push this data to Google Sheets.\n")
+
+
+def cmd_sync_usage(args: argparse.Namespace, config: AppConfig) -> None:
+    """Manually sync application usage data to Google Sheets 'Apps Usages' tab."""
+    from parentalcontrol.app_usage_store import AppUsageStore
+    store = AppUsageStore(config.app_usage_file_path)
+    records = store.get_usage_records_for_sync(device=config.effective_device_name)
+
+    if not config.google_sheet.service_account_path or not os.path.exists(config.google_sheet.service_account_path):
+        print("\n❌ Error: Google Service Account key not found.")
+        print(f"   Expected path: {config.google_sheet.service_account_path or '/etc/parental-control/service_account.json'}")
+        print("   A Google Service Account is required to write usage logs to Google Sheets.")
+        print("   Please refer to docs/GSA_SETUP_GUIDE.md to generate and install your key.\n")
+        sys.exit(1)
+
+    print(f"\n🔄 Syncing {len(records)} application usage records to '{config.google_sheet.apps_usage_sheet_name}'...")
+    client = GoogleSheetClient(
+        sheet_url=config.google_sheet.url,
+        service_account_path=config.google_sheet.service_account_path,
+        sheet_name=config.google_sheet.sheet_name,
+        screen_time_sheet_name=config.google_sheet.screen_time_sheet_name,
+        apps_limit_sheet_name=config.google_sheet.apps_limit_sheet_name,
+        apps_usage_sheet_name=config.google_sheet.apps_usage_sheet_name,
+        cache_path=config.cache_file_path,
+        app_limits_cache_path=config.app_limits_cache_file_path,
+    )
+
+    success = client.push_app_usages(records)
+    if success:
+        print(f"✅ Successfully synced usage data to Google Sheets tab '{config.google_sheet.apps_usage_sheet_name}'!\n")
+    else:
+        print(f"❌ Failed to sync usage data to Google Sheets. Check logs for details.\n")
+        sys.exit(1)
+
+
+def cmd_test_apps(args: argparse.Namespace, config: AppConfig) -> None:
+    """Inspect running processes for a user and check against Apps Limit rules."""
+    from parentalcontrol.app_monitor import scan_user_processes, matches_process
+    from parentalcontrol.app_enforcer import AppEnforcer
+    from parentalcontrol.app_usage_store import AppUsageStore
+
+    target_user = args.user or getpass.getuser()
+    try:
+        pw = pwd.getpwnam(target_user)
+        target_uid = pw.pw_uid
+    except KeyError:
+        print(f"❌ Error: User '{target_user}' does not exist on this system.")
+        sys.exit(1)
+
+    print(f"\n🔍 Scanning running processes for user '{target_user}' (UID {target_uid})...")
+    url = args.url or config.google_sheet.url
+    client = GoogleSheetClient(
+        sheet_url=url,
+        service_account_path=config.google_sheet.service_account_path,
+        sheet_name=config.google_sheet.sheet_name,
+        screen_time_sheet_name=config.google_sheet.screen_time_sheet_name,
+        apps_limit_sheet_name=config.google_sheet.apps_limit_sheet_name,
+        apps_usage_sheet_name=config.google_sheet.apps_usage_sheet_name,
+        cache_path=config.cache_file_path,
+        app_limits_cache_path=config.app_limits_cache_file_path,
+    )
+
+    try:
+        app_rules, is_cached, _ = client.fetch_app_rules(use_cache_on_failure=True)
+        print(f"   Loaded {len(app_rules)} application rules from Google Sheet (Cached: {is_cached})")
+    except Exception as e:
+        print(f"   ⚠️ Could not load remote rules: {e}")
+        app_rules = []
+
+    procs = scan_user_processes(target_uid)
+    print(f"   Found {len(procs)} total running processes for {target_user}.\n")
+
+    store = AppUsageStore(config.app_usage_file_path)
+    enforcer = AppEnforcer(store)
+    applicable = enforcer.filter_applicable_rules(
+        username=target_user,
+        rules=app_rules,
+        device=config.effective_device_name,
+        exact_user_matching=config.rules.exact_username_matching,
+    )
+
+    now_time = datetime.now().time()
+    matched_rows = []
+    seen_pids = set()
+
+    for proc in procs:
+        for rule in applicable:
+            if matches_process(proc, rule):
+                seen_pids.add(proc.pid)
+                win_str = f"{rule.start_time.strftime('%I:%M %p').lstrip('0')} - {rule.end_time.strftime('%I:%M %p').lstrip('0')}" if rule.start_time and rule.end_time else "Anytime"
+                lim_str = f"{rule.daily_limit_minutes}m" if rule.daily_limit_minutes else "-"
+
+                status_str = "✅ Permitted"
+                if not rule.allowed:
+                    status_str = "❌ Blocked"
+                elif not rule.is_in_allowed_window(now_time):
+                    status_str = "⏰ Outside Window"
+                elif rule.daily_limit_minutes is not None:
+                    used = store.get_minutes_used(target_user, rule.app_name)
+                    if used >= rule.daily_limit_minutes:
+                        status_str = "⛔ Quota Reached"
+
+                matched_rows.append([
+                    proc.pid,
+                    proc.name,
+                    proc.appimage_path or proc.exe,
+                    rule.app_name,
+                    win_str,
+                    lim_str,
+                    status_str,
+                ])
+                break
+
+    if matched_rows:
+        print("Matched Application Processes:")
+        headers = ["PID", "Process", "Executable / AppImage", "Matched Rule", "Window", "Daily Limit", "Status"]
+        print(tabulate(matched_rows, headers=headers, tablefmt="fancy_grid"))
+    else:
+        print("ℹ️ No running processes currently match any active 'Apps Limit' rules.")
+    print()
+
+
+def _prompt_yes_no(question: str, default: bool = True) -> bool:
+    """Prompt user for yes/no if interactive, else use default."""
+    if not sys.stdin.isatty():
+        return default
+    try:
+        suffix = " [Y/n]: " if default else " [y/N]: "
+        ans = input(question + suffix).strip().lower()
+        if not ans:
+            return default
+        return ans in ("y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+
+def _verify_or_create_spreadsheet(config: AppConfig, client_email: str) -> None:
+    """Connect to Google Sheet or prompt to create new one."""
+    client = GoogleSheetClient(
+        sheet_url=config.google_sheet.url,
+        service_account_path=config.google_sheet.service_account_path,
+        sheet_name=config.google_sheet.sheet_name,
+        screen_time_sheet_name=config.google_sheet.screen_time_sheet_name,
+        apps_limit_sheet_name=config.google_sheet.apps_limit_sheet_name,
+        apps_usage_sheet_name=config.google_sheet.apps_usage_sheet_name,
+    )
+
+    if not config.google_sheet.url:
+        print("\nℹ️ No Google Spreadsheet URL is currently configured.")
+        if _prompt_yes_no("👉 Would you like to create a brand new Google Spreadsheet automatically?", default=True):
+            try:
+                new_url, sh = client.create_new_spreadsheet()
+                config.google_sheet.url = new_url
+                save_config(config)
+                print(f"\n🎉 Successfully created brand new Google Spreadsheet!")
+                print(f"   URL: {new_url}")
+                print(f"\n⚠️ ACTION REQUIRED: In Google Drive, please open your spreadsheet and Share it")
+                print(f"   with your personal Google account so you can view and edit the schedule.\n")
+                return
+            except Exception as e:
+                print(f"❌ Failed to create spreadsheet: {e}")
+                print("   Make sure Google Drive API and Google Sheets API are enabled in Google Cloud Console.")
+                return
+        else:
+            if sys.stdin.isatty():
+                try:
+                    url_input = input("👉 Please enter your existing Google Spreadsheet URL: ").strip()
+                    if url_input:
+                        config.google_sheet.url = url_input
+                        save_config(config)
+                        client.sheet_url = url_input
+                except (EOFError, KeyboardInterrupt):
+                    pass
+
+    if not config.google_sheet.url:
+        return
+
+    # Test connection
+    print(f"\n🔍 Testing connection to: {config.google_sheet.url}...")
+    success, sh, msg = client.check_spreadsheet_connection()
+    if success and sh is not None:
+        print(f"✅ Successfully connected to Google Sheet ('{sh.title}') via Service Account!")
+
+        # Check worksheets
+        existing_tabs = client.get_existing_worksheets(sh)
+        print(f"   Existing tabs found: {', '.join(existing_tabs) or 'None'}")
+
+        missing = []
+        for tab in [client.screen_time_sheet_name, client.apps_limit_sheet_name, client.apps_usage_sheet_name]:
+            if not any(t.lower() == tab.lower() for t in existing_tabs):
+                missing.append(tab)
+
+        if missing:
+            print(f"\n⚠️ Missing worksheets: {', '.join(missing)}")
+            if _prompt_yes_no("👉 Would you like to create the missing worksheets automatically with standard headers?", default=True):
+                res = client.ensure_default_worksheets(sh, create_missing=True)
+                for tab_name, created in res.items():
+                    if created:
+                        print(f"   ✅ Created worksheet: '{tab_name}'")
+        else:
+            print("   ✅ All required tabs ('Screen Time', 'Apps Limit', 'Apps Usages') are present!")
+        print("\n🚀 Setup complete! Your Parental Control is fully connected to Google Sheets.\n")
+    else:
+        print(f"\n❌ Could not access Google Sheet: {msg}")
+        print("\n📋 REQUIRED STEP TO GRANT ACCESS:")
+        print("   1. Open your Google Sheet in a browser:")
+        print(f"      {config.google_sheet.url}")
+        print("   2. Click the green 'Share' button (top right).")
+        print("   3. Paste this Service Account email with 'Editor' permissions:")
+        print(f"      👉 {client_email}")
+        print("   4. Uncheck 'Notify people' and click 'Share'.")
+        print("\n   After sharing, run: parentalcontrol recheck\n")
+
+        if _prompt_yes_no("👉 Alternatively, would you like to create a brand new Google Spreadsheet instead?", default=False):
+            try:
+                new_url, _ = client.create_new_spreadsheet()
+                config.google_sheet.url = new_url
+                save_config(config)
+                print(f"\n🎉 Successfully created brand new Google Spreadsheet!")
+                print(f"   URL: {new_url}")
+                print(f"\n⚠️ ACTION REQUIRED: In Google Drive, please open your spreadsheet and Share it")
+                print(f"   with your personal Google account so you can view and edit the schedule.\n")
+            except Exception as e:
+                print(f"❌ Failed to create spreadsheet: {e}\n")
+
+
+def cmd_gsa_status(config: AppConfig) -> None:
+    """Display current Google Service Account (GSA) configuration and connection status."""
+    gsa_path_str = config.google_sheet.service_account_path or "/etc/parental-control/service_account.json"
+    gsa_path = Path(gsa_path_str)
+
+    print("\n================ GOOGLE SERVICE ACCOUNT (GSA) STATUS ================\n")
+    print(f"Key File Path         : {gsa_path}")
+
+    if not gsa_path.exists():
+        print("Installation Status   : ❌ Not installed")
+        print("Service Account Email : -")
+        print(f"Google Sheet URL      : {config.google_sheet.url or 'Not configured'}")
+        print("\n💡 To install your Google Service Account key, run:")
+        print("   sudo parentalcontrol gsa --file <path_to_downloaded_json>\n")
+        return
+
+    mode = oct(gsa_path.stat().st_mode)[-3:]
+    perm_ok = mode in ("600", "400")
+    perm_str = f"✅ Permissions {mode}" if perm_ok else f"⚠️ Permissions {mode} (Recommended: 0600 - run 'sudo chmod 600 {gsa_path}')"
+    print(f"Installation Status   : ✅ Installed ({perm_str})")
+
+    from parentalcontrol.sheet_client import validate_service_account_file
+    valid, email, _ = validate_service_account_file(gsa_path)
+    if valid:
+        print(f"Service Account Email : 📧 {email}")
+    else:
+        print(f"Service Account Email : ❌ Invalid key file ({email})")
+        return
+
+    print(f"Google Sheet URL      : {config.google_sheet.url or '❌ Not configured'}")
+    if not config.google_sheet.url:
+        print("\n💡 Configure your sheet URL with: sudo parentalcontrol gsa --url <sheet_url>\n")
+        return
+
+    client = GoogleSheetClient(
+        sheet_url=config.google_sheet.url,
+        service_account_path=str(gsa_path),
+        sheet_name=config.google_sheet.sheet_name,
+        screen_time_sheet_name=config.google_sheet.screen_time_sheet_name,
+        apps_limit_sheet_name=config.google_sheet.apps_limit_sheet_name,
+        apps_usage_sheet_name=config.google_sheet.apps_usage_sheet_name,
+    )
+
+    success, sh, msg = client.check_spreadsheet_connection()
+    if success and sh is not None:
+        print(f"Spreadsheet Access    : ✅ Connected successfully ('{sh.title}')")
+        tabs = client.get_existing_worksheets(sh)
+        has_screen = any(t.lower() == client.screen_time_sheet_name.lower() or t.lower() in ("sheet1", "screen time") for t in tabs)
+        has_apps = any(t.lower() == client.apps_limit_sheet_name.lower() or t.lower() in ("apps limit", "app limits") for t in tabs)
+        has_usages = any(t.lower() == client.apps_usage_sheet_name.lower() or t.lower() in ("apps usages", "app usages") for t in tabs)
+
+        print("\nWorksheets Status:")
+        print(f"  • Tab '{client.screen_time_sheet_name}': {'✅ Present' if has_screen else '❌ Missing'}")
+        print(f"  • Tab '{client.apps_limit_sheet_name}': {'✅ Present' if has_apps else '❌ Missing'}")
+        print(f"  • Tab '{client.apps_usage_sheet_name}': {'✅ Present' if has_usages else '❌ Missing'}")
+
+        if not has_screen or not has_apps or not has_usages:
+            print("\n💡 Run 'sudo parentalcontrol gsa --recheck' to auto-create missing worksheets.")
+    else:
+        print(f"Spreadsheet Access    : ❌ Connection failed ({msg})")
+        print("\n👉 Ensure the spreadsheet is shared with Editor permission to:")
+        print(f"   {email}\n")
+    print()
+
+
+def cmd_gsa(args: argparse.Namespace, config: AppConfig) -> None:
+    """Manage Google Service Account (GSA) key installation, validation, and spreadsheet setup."""
+    if not getattr(args, "file", None):
+        cmd_gsa_status(config)
+        return
+
+    key_src = Path(args.file).expanduser().resolve()
+    if not key_src.exists():
+        print(f"\n❌ Error: Service Account file not found at: {key_src}")
+        sys.exit(1)
+
+    from parentalcontrol.sheet_client import validate_service_account_file
+    is_valid, email_or_err, _ = validate_service_account_file(key_src)
+    if not is_valid:
+        print(f"\n❌ Error: Invalid Service Account file: {email_or_err}")
+        print("   Please ensure you downloaded a valid JSON key from Google Cloud Console.\n")
+        sys.exit(1)
+
+    client_email = email_or_err
+    print(f"\n🔑 Validated Service Account key for: {client_email}")
+
+    # Determine destination path
+    is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+    if is_root:
+        dest_dir = Path("/etc/parental-control")
+    else:
+        dest_dir = Path.home() / ".config" / "parental-control"
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / "service_account.json"
+
+    try:
+        shutil.copyfile(key_src, dest_path)
+        os.chmod(dest_path, 0o600)
+        if is_root:
+            try:
+                shutil.chown(dest_path, user="root", group="root")
+            except Exception:
+                pass
+        print(f"✅ Key installed to: {dest_path} (permissions: 0600)")
+    except PermissionError:
+        print(f"\n❌ Permission denied writing to {dest_path}.")
+        print(f"   Please run with sudo:")
+        print(f"   sudo parentalcontrol gsa --file '{key_src}'\n")
+        sys.exit(1)
+
+    # Update config
+    config.google_sheet.service_account_path = str(dest_path)
+    if getattr(args, "url", None):
+        config.google_sheet.url = args.url
+
+    save_config(config)
+    print("✅ Configuration updated with Service Account path.")
+
+    # Now verify connection to spreadsheet & check worksheets
+    _verify_or_create_spreadsheet(config, client_email)
+
+    # Restart background service if installed and running
+    if is_root and shutil.which("systemctl"):
+        try:
+            res = subprocess.run(["systemctl", "is-active", "parental-control.service"], capture_output=True, text=True)
+            if "active" in res.stdout:
+                subprocess.run(["systemctl", "restart", "parental-control.service"], check=False)
+                print("🔄 Restarted parental-control.service with updated GSA credentials.")
+        except Exception:
+            pass
+
+
+def cmd_recheck(args: argparse.Namespace, config: AppConfig) -> None:
+    """Validate system configuration, file permissions, GSA credentials, and Google Sheet connectivity."""
+    print("\n================ PARENTAL CONTROL SYSTEM HEALTH CHECK ================\n")
+
+    # 1. Config check
+    cfg_path = config.config_file_path or Path("/etc/parental-control/config.yaml")
+    cfg_status = f"✅ Present ({cfg_path})" if cfg_path.exists() else f"⚠️ Missing ({cfg_path})"
+    print(f"Configuration File    : {cfg_status}")
+    print(f"Targeted Child Users  : {config.rules.target_users}")
+    print(f"Exempt Parent Users   : {config.rules.exempt_users}")
+    print(f"Exact Matching        : {'✅ Strict' if config.rules.exact_username_matching else '⚠️ Fuzzy (Typo-tolerant)'}")
+
+    # 2. GSA Key Check
+    gsa_path_str = config.google_sheet.service_account_path or "/etc/parental-control/service_account.json"
+    gsa_path = Path(gsa_path_str)
+    print(f"\nService Account Key   : {gsa_path}")
+    if gsa_path.exists():
+        mode = oct(gsa_path.stat().st_mode)[-3:]
+        perm_ok = mode in ("600", "400")
+        perm_str = f"✅ Permissions {mode}" if perm_ok else f"⚠️ Insecure permissions {mode} (Recommended: 0600 - run 'sudo chmod 600 {gsa_path}')"
+        print(f"Key File Status       : ✅ Found ({perm_str})")
+
+        from parentalcontrol.sheet_client import validate_service_account_file
+        valid, email, _ = validate_service_account_file(gsa_path)
+        if valid:
+            print(f"Service Account Email : 📧 {email}")
+        else:
+            print(f"Service Account Email : ❌ Invalid file ({email})")
+    else:
+        print("Key File Status       : ❌ Not installed")
+        print("                        Run: sudo parentalcontrol gsa --file <path_to_json>")
+
+    # 3. Google Sheet Connection Check
+    print(f"\nGoogle Sheet URL      : {config.google_sheet.url or '❌ Not set'}")
+    if config.google_sheet.url and gsa_path.exists():
+        client = GoogleSheetClient(
+            sheet_url=config.google_sheet.url,
+            service_account_path=str(gsa_path),
+            sheet_name=config.google_sheet.sheet_name,
+            screen_time_sheet_name=config.google_sheet.screen_time_sheet_name,
+            apps_limit_sheet_name=config.google_sheet.apps_limit_sheet_name,
+            apps_usage_sheet_name=config.google_sheet.apps_usage_sheet_name,
+        )
+        success, sh, msg = client.check_spreadsheet_connection()
+        if success and sh is not None:
+            print(f"Google Sheet Access   : ✅ Connected successfully ('{sh.title}')")
+            tabs = client.get_existing_worksheets(sh)
+            has_screen = any(t.lower() == client.screen_time_sheet_name.lower() or t.lower() in ("sheet1", "screen time") for t in tabs)
+            has_apps = any(t.lower() == client.apps_limit_sheet_name.lower() or t.lower() in ("apps limit", "app limits") for t in tabs)
+            has_usages = any(t.lower() == client.apps_usage_sheet_name.lower() or t.lower() in ("apps usages", "app usages") for t in tabs)
+
+            print(f"  • Tab '{client.screen_time_sheet_name}': {'✅ Present' if has_screen else '❌ Missing'}")
+            print(f"  • Tab '{client.apps_limit_sheet_name}': {'✅ Present' if has_apps else '❌ Missing'}")
+            print(f"  • Tab '{client.apps_usage_sheet_name}': {'✅ Present' if has_usages else '❌ Missing'}")
+
+            if not has_screen or not has_apps or not has_usages:
+                print("\n💡 Tip: Run 'sudo parentalcontrol gsa --recheck' to auto-create missing worksheets.")
+        else:
+            print(f"Google Sheet Access   : ❌ Connection failed")
+            print(f"                        {msg}")
+            if gsa_path.exists():
+                from parentalcontrol.sheet_client import validate_service_account_file
+                valid, email, _ = validate_service_account_file(gsa_path)
+                if valid:
+                    print(f"\n👉 Ensure the spreadsheet is shared with Editor permission to:")
+                    print(f"   {email}")
+
+    # 4. Service status check (concise 1-line check)
+    print("\nService Daemon Status :", end=" ")
+    if shutil.which("systemctl"):
+        res = subprocess.run(["systemctl", "is-active", "parental-control.service"], capture_output=True, text=True)
+        is_active = res.stdout.strip()
+        status_icon = "✅ Active (Running)" if is_active == "active" else f"⚠️ {is_active.capitalize()}"
+        print(status_icon)
+    else:
+        print("Systemd not available")
+    print()
+
+
+class CleanHelpFormatter(argparse.HelpFormatter):
+    """Custom help formatter that renders subcommands cleanly without repeating pseudo-actions."""
+    def _format_action(self, action):
+        if isinstance(action, argparse._SubParsersAction):
+            parts = []
+            for subaction in action._get_subactions():
+                parts.append(self._format_action(subaction))
+            return self._join_parts(parts)
+        return super()._format_action(action)
+
+
 def main() -> None:
     """Main CLI entrypoint."""
     # Common argument parser for --config flag (can be used before or after any subcommand)
@@ -622,6 +1137,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="parentalcontrol",
         parents=[config_parent_parser],
+        formatter_class=CleanHelpFormatter,
         description="Parental Control login guard and system service daemon for Ubuntu via Google Sheets.",
     )
     parser.add_argument(
@@ -631,7 +1147,7 @@ def main() -> None:
         help="Show program's version number and exit",
     )
 
-    subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
+    subparsers = parser.add_subparsers(dest="command", title="commands", metavar="<command>")
 
     # Command: list-users
     p_users = subparsers.add_parser("list-users", parents=[config_parent_parser], help="List system user accounts to update into spreadsheet")
@@ -716,6 +1232,27 @@ def main() -> None:
     p_fix = subparsers.add_parser("fix-shortcuts", parents=[config_parent_parser], help="Repair and restore GNOME desktop shortcuts (Alt+Tab, Super)")
     p_fix.add_argument("--user", help="Specific username to restore shortcuts for")
 
+    # Command: app-status
+    p_app_stat = subparsers.add_parser("app-status", parents=[config_parent_parser], help="Show today's application usages and status")
+    p_app_stat.add_argument("--user", help="Filter by specific child username")
+
+    # Command: sync-usage
+    subparsers.add_parser("sync-usage", parents=[config_parent_parser], help="Manually push local application usages to Google Sheets Apps Usages tab")
+
+    # Command: test-apps
+    p_test_apps = subparsers.add_parser("test-apps", parents=[config_parent_parser], help="Inspect running processes and test against Apps Limit rules")
+    p_test_apps.add_argument("--user", help="Username whose processes to inspect (defaults to current user)")
+    p_test_apps.add_argument("--url", help="Override Google Sheet URL")
+
+    # Command: gsa
+    p_gsa = subparsers.add_parser("gsa", parents=[config_parent_parser], help="Install and validate Google Service Account key (GSA)")
+    p_gsa.add_argument("-f", "--file", help="Path to downloaded Service Account JSON key file")
+    p_gsa.add_argument("--url", help="Google Spreadsheet URL (optional, updates config)")
+    p_gsa.add_argument("--recheck", action="store_true", help="Validate GSA key, file permissions, and spreadsheet connection")
+
+    # Command: recheck
+    subparsers.add_parser("recheck", parents=[config_parent_parser], help="Validate system health, GSA key permissions, and spreadsheet connectivity")
+
     args = parser.parse_args()
 
     # Load configuration
@@ -751,6 +1288,16 @@ def main() -> None:
         cmd_override(args, config)
     elif args.command == "fix-shortcuts":
         cmd_fix_shortcuts(args, config)
+    elif args.command == "app-status":
+        cmd_app_status(args, config)
+    elif args.command == "sync-usage":
+        cmd_sync_usage(args, config)
+    elif args.command == "test-apps":
+        cmd_test_apps(args, config)
+    elif args.command == "gsa":
+        cmd_gsa(args, config)
+    elif args.command == "recheck":
+        cmd_recheck(args, config)
     else:
         cmd_service_status(args, config)
 

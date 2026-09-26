@@ -8,9 +8,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Set
 
+from parentalcontrol.app_enforcer import AppEnforcer
+from parentalcontrol.app_monitor import matches_process, scan_user_processes
+from parentalcontrol.app_usage_store import AppUsageStore
 from parentalcontrol.config import AppConfig, SYSTEM_EXEMPT_USERS, load_config
 from parentalcontrol.evaluator import evaluate_access
-from parentalcontrol.models import AccessResult, ScheduleRule
+from parentalcontrol.models import AccessResult, AppLimitRule, AppUsageRecord, ScheduleRule
 from parentalcontrol.sheet_client import GoogleSheetClient
 from parentalcontrol.system_service import (
     UserSession,
@@ -46,11 +49,20 @@ class SystemParentalControlDaemon:
             sheet_url=self.config.google_sheet.url,
             service_account_path=self.config.google_sheet.service_account_path,
             sheet_name=self.config.google_sheet.sheet_name,
+            screen_time_sheet_name=self.config.google_sheet.screen_time_sheet_name,
+            apps_limit_sheet_name=self.config.google_sheet.apps_limit_sheet_name,
+            apps_usage_sheet_name=self.config.google_sheet.apps_usage_sheet_name,
             cache_path=self.config.cache_file_path,
+            app_limits_cache_path=self.config.app_limits_cache_file_path,
         )
         self.active_monitored: Dict[str, MonitoredSession] = {}
         self.cached_rules: List[ScheduleRule] = []
+        self.cached_app_rules: List[AppLimitRule] = []
+        self.usage_store = AppUsageStore(self.config.app_usage_file_path)
+        self.app_enforcer = AppEnforcer(self.usage_store)
         self.last_sync_time: float = 0.0
+        self.last_usage_sync_time: float = 0.0
+        self._last_process_check_ts: float = time.time()
         self._running: bool = True
         self.ipc_server = None
 
@@ -98,12 +110,18 @@ class SystemParentalControlDaemon:
 
         check_interval = 10  # Check every 10 seconds
         sync_interval_sec = max(60, self.config.google_sheet.sync_interval_minutes * 60)
+        usage_sync_interval_sec = max(60, self.config.google_sheet.usage_sync_interval_minutes * 60)
 
         while self._running:
             try:
-                # Periodic Google Sheet sync
-                if time.time() - self.last_sync_time > sync_interval_sec:
+                now_ts = time.time()
+                # Periodic Google Sheet schedule sync
+                if now_ts - self.last_sync_time > sync_interval_sec:
                     self._refresh_rules()
+
+                # Periodic App Usage sync to Google Sheets (Apps Usages tab)
+                if now_ts - self.last_usage_sync_time > usage_sync_interval_sec:
+                    self._sync_app_usages()
 
                 # Discover active sessions
                 sessions = list_active_sessions()
@@ -114,10 +132,14 @@ class SystemParentalControlDaemon:
                 for sid in ended_ids:
                     logger.info(f"Session {sid} ({self.active_monitored[sid].username}) ended.")
                     del self.active_monitored[sid]
+                if ended_ids:
+                    self._sync_app_usages()
 
                 # Inspect each active session
                 for session in sessions:
                     self._process_session(session)
+
+                self._last_process_check_ts = time.time()
 
             except Exception as e:
                 logger.error(f"Error in system daemon loop: {e}", exc_info=True)
@@ -143,14 +165,33 @@ class SystemParentalControlDaemon:
             )
 
     def _refresh_rules(self) -> None:
-        """Fetch updated schedule rules from Google Sheets."""
+        """Fetch updated schedule rules and app limit rules from Google Sheets."""
         try:
             rules, is_cached, age = self.client.fetch_rules(use_cache_on_failure=True)
             self.cached_rules = rules
             self.last_sync_time = time.time()
             logger.info(f"Schedule rules refreshed ({len(rules)} rules). Cached: {is_cached}")
         except Exception as e:
-            logger.warning(f"Failed to refresh Google Sheet rules: {e}")
+            logger.warning(f"Failed to refresh Google Sheet schedule rules: {e}")
+
+        try:
+            app_rules, app_cached, app_age = self.client.fetch_app_rules(use_cache_on_failure=True)
+            self.cached_app_rules = app_rules
+            logger.info(f"App limit rules refreshed ({len(app_rules)} rules). Cached: {app_cached}")
+        except Exception as e:
+            logger.warning(f"Failed to refresh Google Sheet app limit rules: {e}")
+
+    def _sync_app_usages(self) -> None:
+        """Push tracked app usage statistics to Google Sheets ('Apps Usages' tab)."""
+        self.last_usage_sync_time = time.time()
+        try:
+            records = self.usage_store.get_usage_records_for_sync(device=self.config.effective_device_name)
+            if records:
+                success = self.client.push_app_usages(records)
+                if success:
+                    logger.info(f"Successfully synced {len(records)} app usage records to Google Sheets.")
+        except Exception as e:
+            logger.warning(f"Error syncing app usages to Google Sheets: {e}")
 
     def _process_session(self, session: UserSession) -> None:
         """Evaluate access and enforce rules for a single user session."""
@@ -231,6 +272,64 @@ class SystemParentalControlDaemon:
             if rem_mins <= threshold and threshold not in mon_sess.notified_thresholds:
                 mon_sess.notified_thresholds.add(threshold)
                 self._trigger_warning_milestone(session, threshold, rem_mins, end_str)
+
+        # Enforce application limits, time windows, and track running application durations
+        self._enforce_app_limits_for_session(session)
+
+    def _enforce_app_limits_for_session(self, session: UserSession) -> None:
+        """Scan running processes for child session, record active application usage, and enforce limits."""
+        try:
+            procs = scan_user_processes(session.uid)
+            if not procs:
+                return
+
+            now_ts = time.time()
+            elapsed_sec = int(min(60, max(1, now_ts - self._last_process_check_ts)))
+
+            applicable_rules = self.app_enforcer.filter_applicable_rules(
+                username=session.username,
+                rules=self.cached_app_rules,
+                device=self.config.effective_device_name,
+                exact_user_matching=self.config.rules.exact_username_matching,
+            )
+
+            # Record usage for any running processes that match configured app rules
+            # To avoid duplicate counting across multiple processes/threads of the same app, group by rule
+            matched_rules_seen = set()
+            for proc in procs:
+                for rule in applicable_rules:
+                    if rule.app_name in matched_rules_seen:
+                        continue
+                    if matches_process(proc, rule):
+                        matched_rules_seen.add(rule.app_name)
+                        exe_path = proc.appimage_path or proc.exe
+                        binary_label = os.path.basename(exe_path) if exe_path else proc.name
+                        self.usage_store.record_usage(
+                            user=session.username,
+                            app_key=rule.app_name,
+                            app_name=rule.app_name,
+                            binary_pattern=binary_label,
+                            exe_path=exe_path,
+                            elapsed_seconds=elapsed_sec,
+                            daily_limit=rule.daily_limit_minutes,
+                        )
+                        break
+
+            # Now run enforcement (blocks, time windows, quotas, milestone warnings)
+            self.app_enforcer.enforce(
+                username=session.username,
+                uid=session.uid,
+                running_procs=procs,
+                rules=self.cached_app_rules,
+                device=self.config.effective_device_name,
+                exact_user_matching=self.config.rules.exact_username_matching,
+            )
+
+            # Persist usage state to local store
+            self.usage_store.save()
+
+        except Exception as e:
+            logger.error(f"Error enforcing app limits for user '{session.username}': {e}", exc_info=True)
 
     def _trigger_warning_milestone(self, session: UserSession, threshold: int, rem_mins: float, end_str: str) -> None:
         """Send desktop notification and modal prompt into child's session."""
@@ -460,6 +559,11 @@ class SystemParentalControlDaemon:
     def _handle_signal(self, signum, frame) -> None:
         logger.info(f"Received signal {signum}. Stopping System Parental Control Daemon...")
         self._running = False
+        try:
+            self.usage_store.save()
+            self._sync_app_usages()
+        except Exception:
+            pass
         if self.ipc_server:
             try:
                 self.ipc_server.stop()

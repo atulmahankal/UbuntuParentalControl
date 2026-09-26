@@ -78,9 +78,21 @@ parentalcontrol list-users --csv
 
 ---
 
-## 📋 STEP 3: Google Spreadsheet Format Reference
+## 📋 STEP 3: Multi-Tab Google Spreadsheet Format Reference
 
-In your Google Sheet, configure the schedule using the following column format:
+Parental Control supports a multi-tab Google Spreadsheet architecture:
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Screen Time   │     │   Apps Limit    │     │   Apps Usages   │
+│ (Login Schedule)│     │ (Limits/Quotas) │     │ (Live Activity) │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+```
+
+---
+
+### Tab 1: `Screen Time` (Device Login & Screen Hours)
+*Backward-compatible with `Sheet1` or default first tab.*
 
 | User | Device | Day | Start Time | End Time | Allowed | Max Minutes | Message |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -92,21 +104,49 @@ In your Google Sheet, configure the schedule using the following column format:
 | `himanshi` | `*` | `Sunday` | `2:00 PM` | `7:00 PM` | `TRUE` | `120` | Sunday afternoon gaming |
 | `*` | `*` | `*` | `21:00` | `07:00` | `FALSE` | | Bedtime - Access blocked |
 
-### Column Definitions:
+#### Column Definitions:
 - **`User`**: Child's Ubuntu username (e.g. `himanshu`), or `*` / `all` for all children.
 - **`Device`** *(optional)*: Computer name / hostname (e.g. `optiplex-3050`, `laptop`).
   - **Omitted column, empty cell, or `*`**: Applies to **ALL devices** (100% backward-compatible).
   - **Specific device name**: Only applies when the child logs into that specific machine.
   - **Multiple devices**: Separate by commas (e.g. `optiplex-3050, study-laptop`).
-  - **Finding your device name**: Run `hostname` or `parentalcontrol list-users`.
 - **`Day`**: `Monday`, `Tuesday`, `Mon-Fri`, `Weekday`, `Weekend`, `Saturday,Sunday`, `All`, or date `YYYY-MM-DD`.
 - **`Start Time` / `End Time`**: 24-hour (`16:00`) or 12-hour (`4:00 PM`).
 - **`Allowed`**: `TRUE` (allowed) or `FALSE` (lockout).
 - **`Max Minutes`** *(optional)*: Daily screen time quota in minutes or hours (e.g. `120` or `2h`).
 - **`Message`** *(optional)*: Custom note displayed to the child on screen.
 
+---
+
+### Tab 2: `Apps Limit` (Per-User Application Restrictions & Runtime Quotas)
+Controls specific applications, standalone binaries, and AppImages:
+
+| User | App Label | Binary / Pattern | Device | Day | Allowed | Allowed Window | Daily Limit (Min) | Session Limit (Min) | Message |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `himanshu` | `Google Chrome` | `chrome, google-chrome` | `*` | `Monday-Friday` | `TRUE` | `5:00 PM - 8:30 PM` | `60` | `30` | Homework browsing only |
+| `himanshu` | `Discord` | `discord` | `*` | `Monday-Thursday` | `FALSE` | | | | Discord is blocked on school days |
+| `himanshu` | `Steam` | `steam, steamwebhelper` | `optiplex-3050` | `Saturday-Sunday` | `TRUE` | `10:00 AM - 6:00 PM` | `90` | | Weekend gaming limit |
+| `himanshu` | `Downloads Binaries`| `*/Downloads/*, *.AppImage` | `*` | `All` | `FALSE` | | | | Standalone binaries in Downloads are blocked |
+
+#### Features Supported:
+- **Instant Block**: `Allowed: FALSE` (terminates matching PIDs with SIGTERM ➔ SIGKILL and desktop notification).
+- **Allowed Time Window**: `Allowed Window: 5:00 PM - 8:00 PM` (cannot run outside hours).
+- **Daily Runtime Quota**: `Daily Limit (Min): 60` (accumulates runtime across launches; warns at 10m, 5m, 2m before closing).
+- **Standalone Binaries & AppImages**: Direct inspection of `/proc/<pid>/exe`, `/proc/<pid>/environ`, and `/proc/<pid>/cmdline` catches non-installed executables, portable binaries, and squashfs mounts.
 
 ---
+
+### Tab 3: `Apps Usages` (Live Remote Monitoring via Google Service Account)
+Automatically populated by the background service:
+
+| Date | User | Device | App Label | Binary / Pattern | Executable Path | Minutes Used | Daily Limit | Remaining | Status | Last Active |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `2026-09-26` | `himanshu` | `optiplex-3050` | `Google Chrome` | `chrome` | `/opt/google/chrome/chrome` | `42m` | `60m` | `18m` | `Active` | `2026-09-26 05:42:10 PM` |
+| `2026-09-26` | `himanshu` | `optiplex-3050` | `Discord` | `discord` | `/usr/bin/discord` | `0m` | `-` | `-` | `Blocked` | `2026-09-26 04:15:02 PM` |
+
+> [!TIP]
+> To enable live synchronization into `Apps Usages`, set up a **Google Service Account** (GSA).
+> Read the complete step-by-step setup guide: **[`docs/GSA_SETUP_GUIDE.md`](./docs/GSA_SETUP_GUIDE.md)**.
 
 ## 🔄 Automatic Upgrades via `sudo apt update` & `sudo apt upgrade`
 
@@ -247,7 +287,13 @@ enforcement:
 - **Anti-Tampering Watchdog**: If the child attempts to kill or terminate the lockout process without authorization, the root system daemon instantly detects the breach and terminates the session (`loginctl terminate-session`).
 - **Interactive Testing & Overrides**:
   - Test overlay on desktop: `parentalcontrol test-lockout`
-  - Manage overrides via CLI: `parentalcontrol override --user himanshu --minutes 30` (or `--list`, `--revoke`)
+- **Application Restrictions & Usage Monitoring (v1.1.0)**:
+  - Install Service Account key: `sudo parentalcontrol gsa --file <path_to_json>`
+  - Check system health & permissions: `parentalcontrol recheck`
+  - Check today's application usages: `parentalcontrol app-status`
+  - Push local usage immediately to Google Sheets: `parentalcontrol sync-usage`
+  - Dry-run inspect running processes against rules: `parentalcontrol test-apps --user himanshu`
+  - Test schedule and app limits from Google Sheet: `parentalcontrol test-sheet`
 
 ---
 
@@ -273,7 +319,7 @@ sudo uv run parentalcontrol service-install --url "https://docs.google.com/sprea
 
 ## 🧪 Automated Testing
 
-Run the 39 automated unit and integration tests:
+Run the 67 automated unit and integration tests:
 ```bash
 uv run pytest -v
 ```

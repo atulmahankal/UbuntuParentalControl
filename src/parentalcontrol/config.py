@@ -18,8 +18,12 @@ SYSTEM_LOG_DIR = Path("/var/log")
 class GoogleSheetConfig:
     url: str = ""
     service_account_path: Optional[str] = None
-    sheet_name: Optional[str] = None
+    sheet_name: Optional[str] = "Screen Time"
+    screen_time_sheet_name: str = "Screen Time"
+    apps_limit_sheet_name: str = "Apps Limit"
+    apps_usage_sheet_name: str = "Apps Usages"
     sync_interval_minutes: int = 3
+    usage_sync_interval_minutes: int = 5
 
 
 SYSTEM_EXEMPT_USERS = {
@@ -99,6 +103,23 @@ class AppConfig:
         return DEFAULT_CONFIG_DIR / "schedule_cache.json"
 
     @property
+    def app_limits_cache_file_path(self) -> Path:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            return SYSTEM_CONFIG_DIR / "app_limits_cache.json"
+        return DEFAULT_CONFIG_DIR / "app_limits_cache.json"
+
+    @property
+    def app_usage_file_path(self) -> Path:
+        persist_dir = Path("/var/lib/parental-control")
+        if persist_dir.exists() or (hasattr(os, "geteuid") and os.geteuid() == 0):
+            try:
+                persist_dir.mkdir(parents=True, exist_ok=True)
+                return persist_dir / "app_usage.json"
+            except Exception:
+                pass
+        return DEFAULT_CONFIG_DIR / "app_usage.json"
+
+    @property
     def log_file_path(self) -> Path:
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             return SYSTEM_LOG_DIR / "parental-control.log"
@@ -167,12 +188,25 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         else:
             exact_user_matching = bool(exact_user_val)
 
+        screen_sheet = (
+            gs_data.get("screen_time_sheet_name")
+            or gs_data.get("sheet_name")
+            or "Screen Time"
+        )
+        sa_path = gs_data.get("service_account_path")
+        if not sa_path and Path("/etc/parental-control/service_account.json").exists():
+            sa_path = "/etc/parental-control/service_account.json"
+
         cfg = AppConfig(
             google_sheet=GoogleSheetConfig(
                 url=gs_data.get("url", ""),
-                service_account_path=gs_data.get("service_account_path"),
-                sheet_name=gs_data.get("sheet_name"),
+                service_account_path=sa_path,
+                sheet_name=screen_sheet,
+                screen_time_sheet_name=screen_sheet,
+                apps_limit_sheet_name=gs_data.get("apps_limit_sheet_name", "Apps Limit"),
+                apps_usage_sheet_name=gs_data.get("apps_usage_sheet_name", "Apps Usages"),
                 sync_interval_minutes=gs_data.get("sync_interval_minutes", 3),
+                usage_sync_interval_minutes=gs_data.get("usage_sync_interval_minutes", 5),
             ),
             rules=RulesConfig(
                 target_users=rules_data.get("target_users", []),
@@ -215,7 +249,11 @@ def save_config(config: AppConfig, config_path: Optional[Path] = None) -> Path:
             "url": config.google_sheet.url,
             "service_account_path": config.google_sheet.service_account_path,
             "sheet_name": config.google_sheet.sheet_name,
+            "screen_time_sheet_name": config.google_sheet.screen_time_sheet_name,
+            "apps_limit_sheet_name": config.google_sheet.apps_limit_sheet_name,
+            "apps_usage_sheet_name": config.google_sheet.apps_usage_sheet_name,
             "sync_interval_minutes": config.google_sheet.sync_interval_minutes,
+            "usage_sync_interval_minutes": config.google_sheet.usage_sync_interval_minutes,
         },
         "rules": {
             "target_users": config.rules.target_users,

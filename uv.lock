@@ -367,7 +367,7 @@ wheels = [
 
 [[package]]
 name = "parentalcontrol"
-version = "1.0.9"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "google-auth" },
