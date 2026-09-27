@@ -20,6 +20,16 @@ SYSTEM_EXCLUDED_BINARIES: Set[str] = {
     "gnome-session-binary",
     "gnome-session-c",
     "gnome-session-failed",
+    "gnome-session-i",
+    "gnome-session-init-worker",
+    "gnome-session-s",
+    "gnome-session-service",
+    "gnome-keyring-d",
+    "gnome-keyring-daemon",
+    "gdm-wayland-ses",
+    "gdm-wayland-session",
+    "gdm-session-worker",
+    "gdm-x-session",
     "Xwayland",
     "Xorg",
     "dbus-daemon",
@@ -55,7 +65,33 @@ SYSTEM_EXCLUDED_BINARIES: Set[str] = {
     "sd-pam",
     "ssh-agent",
     "gpg-agent",
+    "gcr-ssh-agent",
+    "mpris-proxy",
+    "dconf-service",
+    "goa-daemon",
+    "goa-identity-se",
+    "evolution-sourc",
+    "evolution-source-registry",
+    "update-notifier",
+    "user-session-he",
+    "snapd-desktop-i",
+    "snapd-desktop-integration",
 }
+
+
+def is_user_application(proc: ProcessInfo) -> bool:
+    """Identify whether a running process is an interactive user app or game suitable for general tracking."""
+    if is_system_process(proc):
+        return False
+    if not proc.exe:
+        return False
+    exe_low = proc.exe.lower()
+    # Exclude system daemons and background helpers located in libexec or lib
+    if any(p in exe_low for p in ("/usr/libexec", "/lib/", "/usr/lib/")):
+        return False
+    if any(exe_low.endswith(x) for x in ("/gsd-", "/gnome-", "daemon")):
+        return False
+    return True
 
 
 @dataclass

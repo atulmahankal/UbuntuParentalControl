@@ -87,3 +87,20 @@ himanshi,*,Wednesday,16:00,20:00,TRUE,120,All devices explicit star
     # Star device column parses as '*'
     assert rules[2].user == "himanshi"
     assert rules[2].device == "*"
+
+
+def test_parse_app_csv_allowed_disambiguation():
+    csv_data = """User,App Label,Binary / Pattern,Device,Day,Allowed,Allowed Window,Daily Limit (Min),Session Limit (Min),Message
+*,Google Chrome,"chrome, google-chrome",*,Monday-Friday,TRUE,5:00 PM - 8:30 PM,60,30,Homework browsing limit
+*,Discord,discord,*,Monday-Thursday,FALSE,,,Discord blocked on school days
+"""
+    client = GoogleSheetClient(sheet_url="")
+    app_rules = client._parse_app_csv_content(csv_data)
+    assert len(app_rules) == 2
+    assert app_rules[0].allowed is True
+    assert app_rules[0].start_time == time(17, 0)
+    assert app_rules[0].end_time == time(20, 30)
+
+    # Discord must remain FALSE despite Allowed Window column existing
+    assert app_rules[1].allowed is False
+    assert app_rules[1].app_name == "Discord"

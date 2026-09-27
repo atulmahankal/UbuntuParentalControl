@@ -63,8 +63,9 @@ class AppEnforcer:
         rules: List[AppLimitRule],
         device: str,
         exact_user_matching: bool = True,
+        check_day: bool = True,
     ) -> List[AppLimitRule]:
-        """Filter AppLimitRules that apply to this user, today's day, and this device."""
+        """Filter AppLimitRules that apply to this user and device, optionally checking today's day."""
         now = datetime.now()
         check_date = now.date()
 
@@ -74,11 +75,27 @@ class AppEnforcer:
                 continue
             if not matches_device(r.device, device):
                 continue
-            if not matches_day(r.day, check_date):
+            if check_day and not matches_day(r.day, check_date):
                 continue
             applicable.append(r)
 
         return applicable
+
+    def filter_tracking_rules(
+        self,
+        username: str,
+        rules: List[AppLimitRule],
+        device: str,
+        exact_user_matching: bool = True,
+    ) -> List[AppLimitRule]:
+        """Filter AppLimitRules to record daily usage across all days regardless of day-specific blocks."""
+        return self.filter_applicable_rules(
+            username=username,
+            rules=rules,
+            device=device,
+            exact_user_matching=exact_user_matching,
+            check_day=False,
+        )
 
     def enforce(
         self,

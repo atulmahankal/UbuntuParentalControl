@@ -656,10 +656,10 @@ class GoogleSheetClient:
                 header_map["device"] = key
             elif any(w in k_clean for w in ("day", "date", "when")):
                 header_map["day"] = key
-            elif any(w in k_clean for w in ("allowed", "enabled", "active", "status", "allow", "permit")):
-                header_map["allowed"] = key
             elif any(w in k_clean for w in ("allowed window", "time window", "window", "hours", "time slot")):
                 header_map["window"] = key
+            elif any(w in k_clean for w in ("allowed", "enabled", "active", "status", "allow", "permit")):
+                header_map["allowed"] = key
             elif any(w in k_clean for w in ("start time", "start", "from", "begin")):
                 header_map["start_time"] = key
             elif any(w in k_clean for w in ("end time", "end", "to", "finish")):

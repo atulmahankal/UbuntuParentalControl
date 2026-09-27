@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Set
 
 from parentalcontrol.app_enforcer import AppEnforcer
-from parentalcontrol.app_monitor import matches_process, scan_user_processes
+from parentalcontrol.app_monitor import is_user_application, matches_process, scan_user_processes
 from parentalcontrol.app_usage_store import AppUsageStore
 from parentalcontrol.config import AppConfig, SYSTEM_EXEMPT_USERS, load_config
 from parentalcontrol.evaluator import evaluate_access
@@ -252,7 +252,6 @@ class SystemParentalControlDaemon:
                     urgency="normal",
                     icon="dialog-information",
                 )
-            return
 
         # 2. Existing Session Monitoring
         mon_sess = self.active_monitored[sid]
@@ -286,7 +285,7 @@ class SystemParentalControlDaemon:
             now_ts = time.time()
             elapsed_sec = int(min(60, max(1, now_ts - self._last_process_check_ts)))
 
-            applicable_rules = self.app_enforcer.filter_applicable_rules(
+            tracking_rules = self.app_enforcer.filter_tracking_rules(
                 username=session.username,
                 rules=self.cached_app_rules,
                 device=self.config.effective_device_name,
@@ -296,12 +295,15 @@ class SystemParentalControlDaemon:
             # Record usage for any running processes that match configured app rules
             # To avoid duplicate counting across multiple processes/threads of the same app, group by rule
             matched_rules_seen = set()
+            tracked_pids = set()
+
             for proc in procs:
-                for rule in applicable_rules:
+                for rule in tracking_rules:
                     if rule.app_name in matched_rules_seen:
                         continue
                     if matches_process(proc, rule):
                         matched_rules_seen.add(rule.app_name)
+                        tracked_pids.add(proc.pid)
                         exe_path = proc.appimage_path or proc.exe
                         binary_label = os.path.basename(exe_path) if exe_path else proc.name
                         self.usage_store.record_usage(
@@ -314,6 +316,32 @@ class SystemParentalControlDaemon:
                             daily_limit=rule.daily_limit_minutes,
                         )
                         break
+
+            # Also track other interactive desktop apps/games run by the user
+            seen_unconfigured_names = set()
+            for proc in procs:
+                if proc.pid in tracked_pids:
+                    continue
+                if is_user_application(proc):
+                    app_key = proc.name.lower().strip()
+                    if app_key in seen_unconfigured_names or app_key in matched_rules_seen:
+                        continue
+                    seen_unconfigured_names.add(app_key)
+                    exe_path = proc.appimage_path or proc.exe
+                    binary_label = os.path.basename(exe_path) if exe_path else proc.name
+                    # Format display name e.g. "gnome-text-editor" -> "Gnome Text Editor"
+                    clean_name = proc.name
+                    tokens = [t.capitalize() for t in clean_name.replace("_", "-").split("-") if t]
+                    display_name = " ".join(tokens) if tokens else clean_name
+                    self.usage_store.record_usage(
+                        user=session.username,
+                        app_key=app_key,
+                        app_name=display_name,
+                        binary_pattern=binary_label,
+                        exe_path=exe_path,
+                        elapsed_seconds=elapsed_sec,
+                        daily_limit=None,
+                    )
 
             # Now run enforcement (blocks, time windows, quotas, milestone warnings)
             self.app_enforcer.enforce(

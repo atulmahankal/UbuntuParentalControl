@@ -184,5 +184,9 @@ class AppUsageStore:
                 temp_name = tf.name
 
             os.replace(temp_name, str(self.storage_path))
+            try:
+                os.chmod(self.storage_path, 0o644)
+            except Exception:
+                pass
         except Exception as e:
             logger.warning(f"Failed to save app usage to {self.storage_path}: {e}")

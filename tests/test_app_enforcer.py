@@ -31,6 +31,19 @@ def test_filter_applicable_rules(tmp_path: Path):
     assert len(filtered) == 1
     assert filtered[0].app_name == "Chrome"
 
+    # Tracking rules filter across all days
+    tracking = enforcer.filter_tracking_rules(
+        username="himanshu",
+        rules=[
+            AppLimitRule(user="himanshu", app_name="Chrome", patterns=["chrome"], day="Monday-Friday", device="*"),
+            AppLimitRule(user="himanshi", app_name="Roblox", patterns=["roblox"], day="Sunday", device="*"),
+        ],
+        device="optiplex-3050",
+        exact_user_matching=True,
+    )
+    assert len(tracking) == 1
+    assert tracking[0].app_name == "Chrome"
+
 
 def test_enforce_blocked_app(tmp_path: Path):
     store = AppUsageStore(tmp_path / "store.json")
