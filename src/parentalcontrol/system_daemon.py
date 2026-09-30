@@ -1,6 +1,7 @@
 """System-level multi-session monitoring daemon for Ubuntu."""
 
 import logging
+import os
 import signal
 import sys
 import time
